@@ -161,7 +161,7 @@ class Game:
         self.player.set_walk_or_idle(is_moving)
 
         # Update player
-        self.player.update(dt)
+        self.player.update(dt, self.world.tilemap)
 
         # Update world
         events = self.world.update(dt, self.player)
@@ -198,9 +198,18 @@ class Game:
             # Boss special effect collision
             for effect in boss.get_special_effects()[:]:
                 if effect["type"] == "shockwave" and not effect.get("hit"):
+                    # Skip while charging up
+                    if effect.get("impact_delay", 0) > 0:
+                        continue
                     dist = math.hypot(effect["x"] - self.player.x,
                                       effect["y"] - self.player.y)
                     if abs(dist - effect["radius"]) < 30:
+                        self.player.take_damage(int(effect["damage"]))
+                        effect["hit"] = True
+                elif effect["type"] == "boss_melee" and not effect.get("hit"):
+                    dist = math.hypot(effect["x"] - self.player.x,
+                                      effect["y"] - self.player.y)
+                    if dist < effect["radius"] + self.player.width // 2:
                         self.player.take_damage(int(effect["damage"]))
                         effect["hit"] = True
                 elif effect["type"] == "boss_projectile":

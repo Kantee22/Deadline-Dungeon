@@ -144,14 +144,17 @@ class UI:
     def draw_level_up_effect(self, surface, timer):
         if timer <= 0:
             return
-        alpha = int(200 * timer)
+        # Dimmer + shorter flash
+        alpha = int(70 * min(1.0, timer))
         flash = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
-        flash.fill((255, 255, 180, min(255, alpha)))
+        flash.fill((255, 240, 180, alpha))
         surface.blit(flash, (0, 0))
 
-        text = self.font_lg.render("LEVEL UP!", True, (255, 220, 50))
-        tr = text.get_rect(center=(self.screen_w // 2, self.screen_h // 2 - 50))
-        surface.blit(text, tr)
+        # Only show text for last 0.6s of the flash so it pops without blinding
+        if timer < 0.7:
+            text = self.font_lg.render("LEVEL UP!", True, (255, 220, 50))
+            tr = text.get_rect(center=(self.screen_w // 2, self.screen_h // 2 - 50))
+            surface.blit(text, tr)
 
     def draw_game_over(self, surface, won, player, game_time):
         overlay = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)

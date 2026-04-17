@@ -33,11 +33,15 @@ class Player:
             "attack_type": "melee",
             "attack_damage": 1.0,
             "attack_range": 55,
+            "attack_release": 0.18,         # damage fires N seconds after click
+            "attack_duration": 0.4,          # total animation lock time
             "skill_type": "projectile",
             "skill_damage": 0.8,
             "skill_range": 300,
             "skill_speed": 400,
             "skill_cooldown": 0.8,
+            "skill_release": 0.25,           # draw bow takes longer
+            "skill_duration": 0.5,
             "projectile_color": (220, 200, 130),
             "projectile_sprite": "fire_arrow",
         },
@@ -45,22 +49,30 @@ class Player:
             "attack_type": "melee",
             "attack_damage": 1.3,
             "attack_range": 60,
+            "attack_release": 0.2,
+            "attack_duration": 0.45,
             "skill_type": "melee_big",
             "skill_damage": 2.0,
             "skill_range": 80,
             "skill_cooldown": 2.5,
+            "skill_release": 0.35,           # wind-up then swing
+            "skill_duration": 0.6,
         },
         "Wizard": {
             "attack_type": "projectile",
             "attack_damage": 1.2,
             "attack_range": 350,
             "attack_speed": 350,
+            "attack_release": 0.22,
+            "attack_duration": 0.45,
             "projectile_color": (255, 100, 30),
             "projectile_sprite": "fire_arrow",
             "skill_type": "aoe",
             "skill_damage": 2.5,
             "skill_range": 100,
             "skill_cooldown": 3.0,
+            "skill_release": 0.3,             # cast + release
+            "skill_duration": 0.55,
             "skill_color": (100, 180, 255),
         },
         "Archer": {
@@ -68,6 +80,8 @@ class Player:
             "attack_damage": 1.0,
             "attack_range": 400,
             "attack_speed": 500,
+            "attack_release": 0.2,
+            "attack_duration": 0.45,
             "projectile_color": (180, 255, 100),
             "projectile_sprite": "fire_arrow",
             "skill_type": "projectile_pierce",
@@ -75,6 +89,8 @@ class Player:
             "skill_range": 500,
             "skill_speed": 600,
             "skill_cooldown": 2.0,
+            "skill_release": 0.3,             # strong pull
+            "skill_duration": 0.55,
             "projectile_color_skill": (255, 255, 80),
         },
     }
@@ -113,6 +129,7 @@ class Player:
 
         self.projectiles = []
         self.active_effects = []
+        self.pending_attacks = []   # queued attacks with release_timer
 
         self.invincible_timer = 0.0
         self.hit_flash_timer = 0.0
@@ -194,137 +211,136 @@ class Player:
                     self.animator.set_direction("right")
 
     def left_click(self):
+        """Start attack animation and queue damage release for later."""
         if self._is_dead or self.anim_state in ("hurt", "death"):
             return None
         if self._attack_timer > 0:
             return None
 
         combat = self.CLASS_COMBAT.get(self.class_type, {})
-        atk_type = combat.get("attack_type", "melee")
         dmg = int(self.attack * combat.get("attack_damage", 1.0))
+        duration = combat.get("attack_duration", 0.4)
+        release = combat.get("attack_release", 0.18)
 
         self.anim_state = "attack"
         if self.has_sprites:
             self.animator.set_action("attack", force=True)
-        self._attack_timer = 0.4
+        self._attack_timer = duration
 
-        dx = math.cos(self.facing)
-        dy = math.sin(self.facing)
-
-        if atk_type == "melee":
-            effect = {
-                "type": "melee",
-                "x": self.x + dx * 40,
-                "y": self.y + dy * 40,
-                "damage": dmg,
-                "range": combat.get("attack_range", 50),
-                "radius": combat.get("attack_range", 50),
-                "timer": 0.15,
-                "source": "attack",
-            }
-            self.active_effects.append(effect)
-            return effect
-        elif atk_type == "projectile":
-            speed = combat.get("attack_speed", 350)
-            proj = {
-                "type": "projectile",
-                "x": self.x, "y": self.y,
-                "dx": dx * speed, "dy": dy * speed,
-                "damage": dmg,
-                "max_range": combat.get("attack_range", 300),
-                "start_x": self.x, "start_y": self.y,
-                "color": combat.get("projectile_color", (255, 200, 100)),
-                "radius": 8,
-                "angle": self.facing,
-                "source": "attack",
-            }
-            self.projectiles.append(proj)
-            return proj
-        return None
+        pending = {
+            "is_skill": False,
+            "release_in": release,
+            "atk_type": combat.get("attack_type", "melee"),
+            "damage": dmg,
+            "facing": self.facing,
+            "combat": combat,
+        }
+        self.pending_attacks.append(pending)
+        return pending
 
     def right_click(self):
+        """Start skill animation and queue damage release for later."""
         if self._is_dead or self.anim_state in ("hurt", "death"):
             return None
         if self._skill_cooldown_timer > 0:
             return None
 
         combat = self.CLASS_COMBAT.get(self.class_type, {})
-        skill_type = combat.get("skill_type", "melee")
         dmg = int(self.attack * combat.get("skill_damage", 1.5))
         cd = combat.get("skill_cooldown", 2.0)
+        duration = combat.get("skill_duration", 0.5)
+        release = combat.get("skill_release", 0.3)
 
         self.anim_state = "skill"
         if self.has_sprites:
             self.animator.set_action("skill", force=True)
         self._skill_cooldown_timer = cd
-        self._attack_timer = 0.5
+        self._attack_timer = duration
 
-        dx = math.cos(self.facing)
-        dy = math.sin(self.facing)
+        pending = {
+            "is_skill": True,
+            "release_in": release,
+            "atk_type": combat.get("skill_type", "melee"),
+            "damage": dmg,
+            "facing": self.facing,
+            "combat": combat,
+        }
+        self.pending_attacks.append(pending)
+        return pending
 
-        if skill_type == "melee" or skill_type == "melee_big":
-            effect = {
+    def _spawn_attack(self, pending):
+        """Actually spawn the effect/projectile after the release delay."""
+        atk_type = pending["atk_type"]
+        dmg = pending["damage"]
+        combat = pending["combat"]
+        source = "skill" if pending["is_skill"] else "attack"
+
+        # Use CURRENT player position and facing for spawn (not the click time)
+        # This feels more natural — arrow fires from where you are now
+        facing = pending["facing"]
+        dx = math.cos(facing)
+        dy = math.sin(facing)
+
+        if atk_type == "melee":
+            rng = combat.get("attack_range" if not pending["is_skill"] else "skill_range", 50)
+            self.active_effects.append({
+                "type": "melee",
+                "x": self.x + dx * 40,
+                "y": self.y + dy * 40,
+                "damage": dmg,
+                "range": rng, "radius": rng,
+                "timer": 0.15, "source": source,
+            })
+        elif atk_type == "melee_big":
+            rng = combat.get("skill_range", 80)
+            self.active_effects.append({
                 "type": "melee",
                 "x": self.x + dx * 50,
                 "y": self.y + dy * 50,
                 "damage": dmg,
-                "range": combat.get("skill_range", 80),
-                "radius": combat.get("skill_range", 80),
-                "timer": 0.2,
-                "source": "skill",
-            }
-            self.active_effects.append(effect)
-            return effect
-        elif skill_type == "projectile":
-            speed = combat.get("skill_speed", 400)
-            proj = {
+                "range": rng, "radius": rng,
+                "timer": 0.2, "source": source,
+            })
+        elif atk_type == "projectile":
+            speed = combat.get("skill_speed" if pending["is_skill"] else "attack_speed", 400)
+            max_range = combat.get("skill_range" if pending["is_skill"] else "attack_range", 300)
+            color = combat.get("projectile_color_skill",
+                                combat.get("projectile_color", (255, 255, 100))) \
+                    if pending["is_skill"] else combat.get("projectile_color", (255, 200, 100))
+            self.projectiles.append({
                 "type": "projectile",
                 "x": self.x, "y": self.y,
                 "dx": dx * speed, "dy": dy * speed,
                 "damage": dmg,
-                "max_range": combat.get("skill_range", 400),
+                "max_range": max_range,
                 "start_x": self.x, "start_y": self.y,
-                "color": combat.get("projectile_color_skill",
-                                     combat.get("projectile_color", (255, 255, 80))),
-                "radius": 10,
-                "angle": self.facing,
-                "source": "skill",
-            }
-            self.projectiles.append(proj)
-            return proj
-        elif skill_type == "projectile_pierce":
+                "color": color, "radius": 8,
+                "angle": facing, "source": source,
+            })
+        elif atk_type == "projectile_pierce":
             speed = combat.get("skill_speed", 600)
-            proj = {
+            self.projectiles.append({
                 "type": "projectile",
                 "x": self.x, "y": self.y,
                 "dx": dx * speed, "dy": dy * speed,
                 "damage": dmg,
                 "max_range": combat.get("skill_range", 500),
                 "start_x": self.x, "start_y": self.y,
-                "color": combat.get("projectile_color_skill",
-                                     combat.get("projectile_color", (255, 255, 80))),
+                "color": combat.get("projectile_color_skill", (255, 255, 80)),
                 "radius": 12,
-                "angle": self.facing,
-                "source": "skill",
-                "pierce": True,
-                "hit_targets": [],
-            }
-            self.projectiles.append(proj)
-            return proj
-        elif skill_type == "aoe":
-            effect = {
+                "angle": facing, "source": source,
+                "pierce": True, "hit_targets": [],
+            })
+        elif atk_type == "aoe":
+            self.active_effects.append({
                 "type": "aoe",
                 "x": self.x + dx * 50,
                 "y": self.y + dy * 50,
                 "damage": dmg,
                 "radius": combat.get("skill_range", 100),
                 "color": combat.get("skill_color", (100, 180, 255)),
-                "timer": 0.3,
-                "source": "skill",
-            }
-            self.active_effects.append(effect)
-            return effect
-        return None
+                "timer": 0.3, "source": source,
+            })
 
     def gain_exp(self, amount):
         levels_gained = []
@@ -386,7 +402,7 @@ class Player:
     def is_alive(self):
         return self.hp > 0
 
-    def update(self, dt):
+    def update(self, dt, tilemap=None):
         if self.invincible_timer > 0:
             self.invincible_timer -= dt
         if self.hit_flash_timer > 0:
@@ -411,10 +427,24 @@ class Player:
             elif self._attack_timer <= 0:
                 self.anim_state = "idle"
 
-        # Update projectiles
+        # Release pending attacks when their timer expires
+        for pending in self.pending_attacks[:]:
+            pending["release_in"] -= dt
+            if pending["release_in"] <= 0:
+                self._spawn_attack(pending)
+                self.pending_attacks.remove(pending)
+
+        # Update projectiles + wall collision
         for proj in self.projectiles[:]:
             proj["x"] += proj["dx"] * dt
             proj["y"] += proj["dy"] * dt
+
+            # Remove if hit wall
+            if tilemap and tilemap.is_wall(proj["x"], proj["y"]):
+                self.projectiles.remove(proj)
+                continue
+
+            # Remove if exceeded max range
             dist = math.hypot(proj["x"] - proj["start_x"],
                               proj["y"] - proj["start_y"])
             if dist > proj["max_range"]:
@@ -429,7 +459,6 @@ class Player:
         if self.has_sprites:
             self.animator.update(dt)
 
-        # Update projectile animation (for wizard fireball etc)
         if self.projectile_animator:
             self.projectile_animator.update(dt)
 
