@@ -77,6 +77,7 @@ class Boss(Enemy):
         self.special_cooldown = 4.0
         self._special_effects = []
         self._using_special = False
+        self._pending_special = None      # animation-synced special payload
 
         # Visual
         self._pulse_timer = 0.0
@@ -96,6 +97,31 @@ class Boss(Enemy):
             thresholds.append(self.max_hp * (1 - i / self.max_phases))
         return thresholds
 
+    def attack_player(self, player):
+        """Elite Orc has a radial spin attack - hits all around at once.
+        Other bosses use the normal enemy attack.
+        """
+        if self.boss_type != "final_boss":
+            return super().attack_player(player)
+
+        # Final boss radial attack: bigger range, no facing requirement
+        if (not self.alive or self._attack_timer > 0
+                or self._is_dying or self._using_special):
+            return 0
+
+        dist = math.hypot(player.x - self.x, player.y - self.y)
+        spin_radius = self.size + 75
+        if dist < spin_radius:
+            self._attack_timer = self.attack_cooldown
+            self.direction = "right" if player.x > self.x else "left"
+            if self.has_sprites:
+                self.animator.set_direction(self.direction)
+            self._update_animation("attack")
+
+            damage = player.take_damage(self.attack)
+            return damage
+        return 0
+
     def phase_transition(self):
         for i, threshold in enumerate(self.phase_thresholds):
             if self.hp <= threshold and self.phase <= i + 1:
@@ -109,9 +135,33 @@ class Boss(Enemy):
         self.speed = int(self.speed * 1.1)
         self.special_cooldown = max(1.5, self.special_cooldown * 0.8)
 
+    def _get_animation_duration(self, action):
+        """Get the total duration of an animation for this boss."""
+        if self.has_sprites:
+            key = f"{action}_{self.direction}"
+            anim = self.animator.animations.get(key)
+            if anim and anim.frames:
+                return len(anim.frames) * anim.frame_duration
+        return 0.6
+
+    def can_use_special(self):
+        """Phase gating for special:
+        - Mini bosses (1, 2): phase 1 = no special, phase 2+ = special enabled
+        - Final boss (Elite Orc): special available from phase 1
+        """
+        if self.boss_type == "final_boss":
+            return True
+        return self.phase >= 2
+
     def special_attack(self, player_x, player_y):
-        """Execute boss-type-specific special attack."""
+        """Execute boss-type-specific special.
+        Special is only available in phase 2+ for mini bosses.
+        Elite Orc (final) has special from the start.
+        """
         if self.special_timer > 0 or self._using_special:
+            return None
+        # Phase-gate: mini bosses don't use special in phase 1
+        if self.boss_type in ("mini_boss_1", "mini_boss_2") and not self.can_use_special():
             return None
 
         self.special_timer = self.special_cooldown
@@ -124,88 +174,129 @@ class Boss(Enemy):
             self.animator.set_direction(self.direction)
             self.animator.set_action("special", force=True)
 
+        anim_dur = self._get_animation_duration("special")
+
         # Dispatch by boss type
         if self.boss_type == "mini_boss_1":
-            return self._skill_ground_slam(player_x, player_y)
+            return self._skill_ground_slam(player_x, player_y, anim_dur)
         elif self.boss_type == "mini_boss_2":
-            return self._skill_charge_bite(player_x, player_y)
+            return self._skill_charge_bite(player_x, player_y, anim_dur)
         elif self.boss_type == "final_boss":
-            return self._skill_jump_slam(player_x, player_y)
+            return self._skill_jump_slam(player_x, player_y, anim_dur)
         return None
 
-    def _skill_ground_slam(self, player_x, player_y):
-        """Boss 1 (Greatsword Skeleton): heavy slam with gray shockwave."""
-        effect = {
-            "type": "shockwave",
-            "x": self.x, "y": self.y,
-            "radius": 0,
-            "max_radius": 160 + self.phase * 25,
-            "damage": self.attack,
-            "timer": 0.5,
-            "life": 0.5,
-            "hit": False,
-            "color": (200, 200, 200),    # light gray
-            "thickness": 5,
-            "impact_delay": 0.15,         # charge up before shockwave starts
+    def _skill_ground_slam(self, player_x, player_y, anim_dur):
+        """Boss 1 phase 2: slam with gray shockwave at end of animation."""
+        self._pending_special = {
+            "type": "ground_slam",
+            "release_in": max(0.1, anim_dur - 0.12),  # trigger at second-to-last frame
+            "damage": self.attack * 1.2,
         }
-        self._special_effects.append(effect)
-        return {"type": "ground_slam", "damage": self.attack}
+        return {"type": "ground_slam"}
 
-    def _skill_charge_bite(self, player_x, player_y):
-        """Boss 2 (Werewolf): dash toward player, damage at end of dash."""
+    def _skill_charge_bite(self, player_x, player_y, anim_dur):
+        """Boss 2 phase 2: lunge forward, stop, damage when anim ends."""
         dx = player_x - self.x
         dy = player_y - self.y
         dist = math.hypot(dx, dy)
         if dist < 1:
             return None
-
-        # Distance to cover (capped)
-        travel = min(dist, 220 + self.phase * 30)
+        travel = min(dist - 20, 220 + self.phase * 20)
+        travel = max(50, travel)
         vx = dx / dist
         vy = dy / dist
 
-        effect = {
+        # Dash takes first 60% of animation, then hold still for hit
+        dash_time = anim_dur * 0.6
+        self._pending_special = {
             "type": "charge_dash",
-            "boss": self,
             "vx": vx, "vy": vy,
-            "speed": 500,
-            "travel_remaining": travel,
+            "dash_remaining": dash_time,
+            "dash_speed": travel / dash_time if dash_time > 0 else 0,
+            "release_in": anim_dur - 0.1,   # damage near end
             "damage": self.attack * 1.5,
-            "hit": False,
-            "trail": [],                  # for visual trail
+            "trail": [],
         }
-        self._special_effects.append(effect)
-        return {"type": "charge", "damage": effect["damage"]}
+        return {"type": "charge"}
 
-    def _skill_jump_slam(self, player_x, player_y):
-        """Boss 3 (Elite Orc): jump+slam, massive shockwave."""
-        # Position the slam where the player currently is (or close to boss if far)
+    def _skill_jump_slam(self, player_x, player_y, anim_dur):
+        """Boss 3 phase 2+: jump to player, slam shockwave when anim ends."""
+        # Move partway toward player during jump animation
         dx = player_x - self.x
         dy = player_y - self.y
         dist = math.hypot(dx, dy)
-        if dist > 0 and dist < 350:
-            # Teleport/jump to near player
-            target_x = player_x
-            target_y = player_y
-            self.x = target_x
-            self.y = target_y
 
-        effect = {
-            "type": "shockwave",
-            "x": self.x, "y": self.y,
-            "radius": 0,
-            "max_radius": 220 + self.phase * 30,
-            "damage": self.attack * 1.3,
-            "timer": 0.7,
-            "life": 0.7,
-            "hit": False,
-            "color": (255, 150, 50),     # intense orange
-            "thickness": 8,
-            "impact_delay": 0.25,         # longer wind-up
-            "inner_ring": True,           # draw a second shockwave ring
+        jump_time = anim_dur * 0.7
+        if dist > 0:
+            jump_dist = min(dist, 280)
+            vx = (dx / dist) * (jump_dist / jump_time) if jump_time > 0 else 0
+            vy = (dy / dist) * (jump_dist / jump_time) if jump_time > 0 else 0
+        else:
+            vx = vy = 0
+
+        self._pending_special = {
+            "type": "jump_slam",
+            "vx": vx, "vy": vy,
+            "jump_remaining": jump_time,
+            "release_in": anim_dur - 0.1,
+            "damage": self.attack * 1.4,
         }
-        self._special_effects.append(effect)
-        return {"type": "jump_slam", "damage": effect["damage"]}
+        return {"type": "jump_slam"}
+
+    def _release_special(self, pending):
+        """Actually spawn the special effect when timer runs out."""
+        kind = pending["type"]
+
+        if kind == "ground_slam":
+            self._special_effects.append({
+                "type": "shockwave",
+                "x": self.x, "y": self.y,
+                "radius": 0,
+                "max_radius": 170 + self.phase * 25,
+                "damage": pending["damage"],
+                "timer": 0.5, "life": 0.5,
+                "hit": False,
+                "color": (210, 210, 210),
+                "thickness": 6,
+                "impact_delay": 0.0,
+            })
+
+        elif kind == "charge_dash":
+            # Damage at where boss stopped
+            self._special_effects.append({
+                "type": "boss_melee",
+                "x": self.x, "y": self.y,
+                "radius": 95,
+                "damage": pending["damage"],
+                "timer": 0.25, "life": 0.25,
+                "hit": False,
+                "color": (200, 50, 50),
+            })
+
+        elif kind == "jump_slam":
+            # Damage at landing + shockwave
+            self._special_effects.append({
+                "type": "boss_melee",
+                "x": self.x, "y": self.y,
+                "radius": 90,
+                "damage": pending["damage"] * 0.5,
+                "timer": 0.2, "life": 0.2,
+                "hit": False,
+                "color": (255, 100, 40),
+            })
+            self._special_effects.append({
+                "type": "shockwave",
+                "x": self.x, "y": self.y,
+                "radius": 0,
+                "max_radius": 240 + self.phase * 30,
+                "damage": pending["damage"],
+                "timer": 0.7, "life": 0.7,
+                "hit": False,
+                "color": (255, 140, 50),
+                "thickness": 8,
+                "impact_delay": 0.0,
+                "inner_ring": True,
+            })
 
     def update(self, dt, player_x, player_y, world_w, world_h, tilemap=None):
         """Update boss AI and special attack logic."""
@@ -215,16 +306,75 @@ class Boss(Enemy):
         self.special_timer = max(0, self.special_timer - dt)
         self._pulse_timer += dt
 
-        # Handle special animation finishing
+        # Special animation playing
         if self._using_special:
+            # Handle movement during special (dash / jump)
+            if self._pending_special:
+                ps = self._pending_special
+
+                # Boss 2: dash forward during dash_remaining time
+                if ps["type"] == "charge_dash" and ps["dash_remaining"] > 0:
+                    move = min(ps["dash_remaining"], dt)
+                    step_x = ps["vx"] * ps["dash_speed"] * move
+                    step_y = ps["vy"] * ps["dash_speed"] * move
+                    # Axis-separated wall collision for the dash
+                    if tilemap:
+                        if not tilemap.is_wall(self.x + step_x, self.y + step_y):
+                            self.x += step_x
+                            self.y += step_y
+                        elif not tilemap.is_wall(self.x + step_x, self.y):
+                            self.x += step_x
+                        elif not tilemap.is_wall(self.x, self.y + step_y):
+                            self.y += step_y
+                    else:
+                        self.x += step_x
+                        self.y += step_y
+                    ps["dash_remaining"] -= move
+
+                    # Trail for visual
+                    trail = ps.get("trail", [])
+                    trail.append((self.x, self.y, 0.3))
+                    ps["trail"] = [
+                        (tx, ty, tl - dt) for (tx, ty, tl) in trail if tl - dt > 0
+                    ]
+
+                # Boss 3: jump motion during jump_remaining
+                elif ps["type"] == "jump_slam" and ps["jump_remaining"] > 0:
+                    move = min(ps["jump_remaining"], dt)
+                    step_x = ps["vx"] * move
+                    step_y = ps["vy"] * move
+                    if tilemap:
+                        if not tilemap.is_wall(self.x + step_x, self.y + step_y):
+                            self.x += step_x
+                            self.y += step_y
+                        elif not tilemap.is_wall(self.x + step_x, self.y):
+                            self.x += step_x
+                        elif not tilemap.is_wall(self.x, self.y + step_y):
+                            self.y += step_y
+                    else:
+                        self.x += step_x
+                        self.y += step_y
+                    ps["jump_remaining"] -= move
+
+                # Release damage when timer fires
+                ps["release_in"] -= dt
+                if ps["release_in"] <= 0 and not ps.get("released"):
+                    self._release_special(ps)
+                    ps["released"] = True
+
+            # Wait for animation to finish
             if self.has_sprites:
                 self.animator.update(dt)
                 if self.animator.is_action_finished():
                     self._using_special = False
+                    self._pending_special = None
                     self.anim_state = "idle"
                     self.animator.set_action("idle")
             else:
-                self._using_special = False
+                # No sprite - use fallback timer
+                if self._pending_special and self._pending_special.get("released"):
+                    self._using_special = False
+                    self._pending_special = None
 
             self._update_special_effects(dt)
             return
@@ -250,7 +400,6 @@ class Boss(Enemy):
     def _update_special_effects(self, dt):
         for effect in self._special_effects[:]:
             if effect["type"] == "shockwave":
-                # Wait out impact_delay (charge-up) before expanding
                 if effect.get("impact_delay", 0) > 0:
                     effect["impact_delay"] -= dt
                     continue
@@ -258,42 +407,6 @@ class Boss(Enemy):
                 life = effect.get("life", 0.5)
                 effect["radius"] += (effect["max_radius"] / life) * dt
                 if effect["timer"] <= 0:
-                    self._special_effects.remove(effect)
-
-            elif effect["type"] == "charge_dash":
-                boss = effect["boss"]
-                move_dist = effect["speed"] * dt
-                move_dist = min(move_dist, effect["travel_remaining"])
-                boss.x += effect["vx"] * move_dist
-                boss.y += effect["vy"] * move_dist
-                effect["travel_remaining"] -= move_dist
-
-                # Record trail only while moving
-                if move_dist > 0.5:
-                    trail = effect.get("trail", [])
-                    trail.append((boss.x, boss.y, 0.3))
-                    effect["trail"] = trail
-                # Fade out trail points
-                if "trail" in effect:
-                    effect["trail"] = [
-                        (tx, ty, tl - dt) for (tx, ty, tl) in effect["trail"]
-                        if tl - dt > 0
-                    ]
-
-                if effect["travel_remaining"] <= 0 and not effect.get("hit_triggered"):
-                    effect["hit_triggered"] = True
-                    self._special_effects.append({
-                        "type": "boss_melee",
-                        "x": boss.x, "y": boss.y,
-                        "radius": 85,
-                        "damage": effect["damage"],
-                        "timer": 0.25,
-                        "life": 0.25,
-                        "hit": False,
-                        "color": (200, 50, 50),
-                    })
-
-                if effect["travel_remaining"] <= 0 and not effect.get("trail"):
                     self._special_effects.remove(effect)
 
             elif effect["type"] == "boss_melee":
@@ -362,6 +475,19 @@ class Boss(Enemy):
             bar_color = (220, 40, 40) if self.phase < self.max_phases else (255, 100, 30)
             pygame.draw.rect(surface, bar_color, (bx, by, int(bar_w * ratio), bar_h))
 
+        # Draw dash trail if boss is currently charging
+        if self._using_special and self._pending_special:
+            ps = self._pending_special
+            if ps.get("type") == "charge_dash":
+                for (tx, ty, life) in ps.get("trail", []):
+                    alpha = int(140 * (life / 0.3))
+                    trail_surf = pygame.Surface((50, 50), pygame.SRCALPHA)
+                    pygame.draw.circle(trail_surf, (180, 100, 100, alpha),
+                                       (25, 25), 20)
+                    surface.blit(trail_surf,
+                                 (int(tx - camera_x) - 25,
+                                  int(ty - camera_y) - 25))
+
         # Draw special effects
         for effect in self._special_effects:
             if effect["type"] == "shockwave":
@@ -391,17 +517,6 @@ class Boss(Enemy):
                 ex = int(effect["x"] - camera_x)
                 ey = int(effect["y"] - camera_y)
                 surface.blit(wave_surf, (ex - r - 4, ey - r - 4))
-
-            elif effect["type"] == "charge_dash":
-                # Draw motion trail
-                for (tx, ty, life) in effect.get("trail", []):
-                    alpha = int(120 * (life / 0.3))
-                    trail_surf = pygame.Surface((40, 40), pygame.SRCALPHA)
-                    pygame.draw.circle(trail_surf, (180, 100, 100, alpha),
-                                       (20, 20), 16)
-                    surface.blit(trail_surf,
-                                 (int(tx - camera_x) - 20,
-                                  int(ty - camera_y) - 20))
 
             elif effect["type"] == "boss_melee":
                 r = effect["radius"]

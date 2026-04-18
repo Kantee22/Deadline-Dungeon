@@ -210,8 +210,30 @@ class Player:
                 if self.has_sprites:
                     self.animator.set_direction("right")
 
+    def _compute_release_time(self, action, is_projectile=False):
+        """Return when damage/projectile should fire during animation.
+        - Melee: fires 6 frames before end (1 frame later than previous tune)
+        - Projectile (arrow/fireball): fires at the LAST frame (release moment)
+        """
+        if self.has_sprites:
+            key = f"{action}_{self.direction}"
+            anim = self.animator.animations.get(key)
+            if anim and anim.frames:
+                total = len(anim.frames) * anim.frame_duration
+                min_release = anim.frame_duration * 2.0
+
+                if is_projectile:
+                    # Projectile: fire on final frame (release)
+                    desired = total - anim.frame_duration * 0.5
+                else:
+                    # Melee: fire 6 frames before end (1 later than before)
+                    desired = total - anim.frame_duration * 6.2
+
+                return max(min_release, desired)
+        return 0.15
+
     def left_click(self):
-        """Start attack animation and queue damage release for later."""
+        """Start attack animation. Damage fires near end of animation."""
         if self._is_dead or self.anim_state in ("hurt", "death"):
             return None
         if self._attack_timer > 0:
@@ -219,18 +241,28 @@ class Player:
 
         combat = self.CLASS_COMBAT.get(self.class_type, {})
         dmg = int(self.attack * combat.get("attack_damage", 1.0))
-        duration = combat.get("attack_duration", 0.4)
-        release = combat.get("attack_release", 0.18)
+        atk_type = combat.get("attack_type", "melee")
 
         self.anim_state = "attack"
         if self.has_sprites:
             self.animator.set_action("attack", force=True)
+
+        # Projectile attacks fire at the LAST frame; melee fires 6 frames before end
+        is_proj = atk_type in ("projectile", "projectile_pierce")
+        release = self._compute_release_time("attack", is_projectile=is_proj)
+        if self.has_sprites:
+            key = f"attack_{self.direction}"
+            anim = self.animator.animations.get(key)
+            duration = (len(anim.frames) * anim.frame_duration
+                         if anim and anim.frames else 0.4)
+        else:
+            duration = 0.4
         self._attack_timer = duration
 
         pending = {
             "is_skill": False,
             "release_in": release,
-            "atk_type": combat.get("attack_type", "melee"),
+            "atk_type": atk_type,
             "damage": dmg,
             "facing": self.facing,
             "combat": combat,
@@ -239,7 +271,7 @@ class Player:
         return pending
 
     def right_click(self):
-        """Start skill animation and queue damage release for later."""
+        """Start skill animation. Damage fires near end of animation."""
         if self._is_dead or self.anim_state in ("hurt", "death"):
             return None
         if self._skill_cooldown_timer > 0:
@@ -248,19 +280,28 @@ class Player:
         combat = self.CLASS_COMBAT.get(self.class_type, {})
         dmg = int(self.attack * combat.get("skill_damage", 1.5))
         cd = combat.get("skill_cooldown", 2.0)
-        duration = combat.get("skill_duration", 0.5)
-        release = combat.get("skill_release", 0.3)
+        skill_type = combat.get("skill_type", "melee")
 
         self.anim_state = "skill"
         if self.has_sprites:
             self.animator.set_action("skill", force=True)
         self._skill_cooldown_timer = cd
+
+        is_proj = skill_type in ("projectile", "projectile_pierce")
+        release = self._compute_release_time("skill", is_projectile=is_proj)
+        if self.has_sprites:
+            key = f"skill_{self.direction}"
+            anim = self.animator.animations.get(key)
+            duration = (len(anim.frames) * anim.frame_duration
+                         if anim and anim.frames else 0.5)
+        else:
+            duration = 0.5
         self._attack_timer = duration
 
         pending = {
             "is_skill": True,
             "release_in": release,
-            "atk_type": combat.get("skill_type", "melee"),
+            "atk_type": skill_type,
             "damage": dmg,
             "facing": self.facing,
             "combat": combat,

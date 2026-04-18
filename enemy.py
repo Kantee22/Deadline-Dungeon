@@ -57,13 +57,16 @@ class Enemy:
 
         # Direction and animation state
         self.direction = "right"
-        self.anim_state = "idle"  # idle, walk, attack, hurt, death
+        self.anim_state = "idle"
         self._hurt_timer = 0.0
         self._death_timer = 0.0
         self._is_dying = False
 
-        # Detection / aggro range
-        self.detect_range = 200
+        # Pending attack queue (damage fires near end of attack animation)
+        self._pending_attack = None
+
+        # Detection / aggro range (larger = starts chasing earlier)
+        self.detect_range = 380
         self.attack_range = 30
 
         # Load sprites
@@ -141,38 +144,41 @@ class Enemy:
             move_dx = math.cos(self._wander_angle) * self.speed * 0.3 * dt
             move_dy = math.sin(self._wander_angle) * self.speed * 0.3 * dt
 
-        # Apply movement with wall collision
+        # Apply movement with wall collision (footprint at feet)
+        def has_wall_at(x, y):
+            if not tilemap:
+                return False
+            # Footprint at feet - narrow body, below center
+            fw = max(8, self.size - 8)
+            foot_top = max(2, self.size // 4)
+            foot_bot = max(12, self.size - 2)
+            return (tilemap.is_wall(x - fw, y + foot_top) or
+                    tilemap.is_wall(x + fw, y + foot_top) or
+                    tilemap.is_wall(x - fw, y + foot_bot) or
+                    tilemap.is_wall(x + fw, y + foot_bot))
+
         if tilemap:
             new_x = self.x + move_dx
             new_y = self.y + move_dy
 
-            if not tilemap.is_wall(new_x, new_y):
+            if not has_wall_at(new_x, new_y):
                 self.x = new_x
                 self.y = new_y
-            elif not tilemap.is_wall(new_x, self.y):
-                # Slide horizontally
+            elif not has_wall_at(new_x, self.y):
                 self.x = new_x
-            elif not tilemap.is_wall(self.x, new_y):
-                # Slide vertically
+            elif not has_wall_at(self.x, new_y):
                 self.y = new_y
             elif dist < self.detect_range and dist > 0:
-                # Chasing and blocked — try perpendicular direction to go around
-                # Try the two perpendicular directions, pick whichever is walkable
+                # Chasing and blocked — sidestep perpendicular to go around
                 perp_dx = -move_dy
                 perp_dy = move_dx
-                test_x = self.x + perp_dx
-                test_y = self.y + perp_dy
-                if not tilemap.is_wall(test_x, test_y):
-                    self.x = test_x
-                    self.y = test_y
+                if not has_wall_at(self.x + perp_dx, self.y + perp_dy):
+                    self.x += perp_dx
+                    self.y += perp_dy
                 else:
-                    # Try opposite perpendicular
-                    test_x = self.x - perp_dx
-                    test_y = self.y - perp_dy
-                    if not tilemap.is_wall(test_x, test_y):
-                        self.x = test_x
-                        self.y = test_y
-                    # else: stay in place
+                    if not has_wall_at(self.x - perp_dx, self.y - perp_dy):
+                        self.x -= perp_dx
+                        self.y -= perp_dy
         else:
             self.x += move_dx
             self.y += move_dy
@@ -200,8 +206,37 @@ class Enemy:
         if self.has_sprites:
             self.animator.update(dt)
 
+    def _release_pending_attack_if_due(self, dt, player):
+        """Fire queued attack damage once enough animation time has passed."""
+        if self._pending_attack is None:
+            return 0
+        self._pending_attack["release_in"] -= dt
+        if self._pending_attack["release_in"] <= 0:
+            pa = self._pending_attack
+            self._pending_attack = None
+            # Check player is still in range at release time
+            dist = math.hypot(player.x - self.x, player.y - self.y)
+            if dist < pa["range"]:
+                return player.take_damage(pa["damage"])
+        return 0
+
+    def _compute_attack_release(self):
+        """Delay damage very close to end of attack animation.
+        Fire at the final frame so the hit syncs with the swing's impact.
+        """
+        if self.has_sprites:
+            key = f"attack_{self.direction}"
+            anim = self.animator.animations.get(key)
+            if anim and anim.frames:
+                total = len(anim.frames) * anim.frame_duration
+                # Fire 0.2 frame_durations before end (virtually the last frame)
+                min_release = anim.frame_duration * 2.0
+                desired = total - anim.frame_duration * 0.2
+                return max(min_release, desired)
+        return 0.4
+
     def attack_player(self, player):
-        """Try to attack the player if in range and cooldown ready."""
+        """Start attack animation and queue damage to fire near the end."""
         if not self.alive or self._attack_timer > 0 or self._is_dying:
             return 0
 
@@ -215,8 +250,15 @@ class Enemy:
                 self.animator.set_direction(self.direction)
             self._update_animation("attack")
 
-            damage = player.take_damage(self.attack)
-            return damage
+            # Queue delayed damage
+            release = self._compute_attack_release()
+            self._pending_attack = {
+                "release_in": release,
+                "damage": self.attack,
+                "range": self.attack_range + player.width // 2 + self.size + 15,
+            }
+            # Return 0 here - damage fires later via _release_pending_attack_if_due
+            return 0
         return 0
 
     def take_damage(self, amount):

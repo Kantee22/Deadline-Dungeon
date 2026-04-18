@@ -19,6 +19,19 @@ class UI:
         self.WHITE = (255, 255, 255)
         self.GRAY = (160, 160, 160)
 
+        # Load menu background from images/menu/menu_background.png
+        self.menu_background = None
+        import os
+        bg_path = os.path.join("images", "menu", "menu_background.png")
+        if os.path.exists(bg_path):
+            try:
+                raw = pygame.image.load(bg_path).convert_alpha()
+                # Scale to screen size
+                self.menu_background = pygame.transform.scale(
+                    raw, (screen_w, screen_h))
+            except pygame.error:
+                pass
+
     def _draw_bar(self, surface, x, y, w, h, fraction, fill_color, bg_color):
         pygame.draw.rect(surface, bg_color, (x, y, w, h), border_radius=3)
         fill_w = int(w * max(0, min(1, fraction)))
@@ -144,17 +157,25 @@ class UI:
     def draw_level_up_effect(self, surface, timer):
         if timer <= 0:
             return
-        # Dimmer + shorter flash
-        alpha = int(70 * min(1.0, timer))
-        flash = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
-        flash.fill((255, 240, 180, alpha))
-        surface.blit(flash, (0, 0))
 
-        # Only show text for last 0.6s of the flash so it pops without blinding
-        if timer < 0.7:
-            text = self.font_lg.render("LEVEL UP!", True, (255, 220, 50))
-            tr = text.get_rect(center=(self.screen_w // 2, self.screen_h // 2 - 50))
-            surface.blit(text, tr)
+        # No full-screen flash — just a gentle fade-in text above player area
+        # Fade the text in based on timer (short 0.5s burst)
+        # timer goes from 1.0 down to 0; use 0.3-0.8 window
+        if timer < 0.15:
+            return
+        fade = min(1.0, (1.0 - timer) * 2) if timer > 0.5 else timer * 1.5
+        fade = max(0, min(1.0, fade))
+
+        text = self.font_lg.render("LEVEL UP!", True, (255, 220, 50))
+        text.set_alpha(int(255 * fade))
+        tr = text.get_rect(center=(self.screen_w // 2, self.screen_h // 2 - 80))
+        surface.blit(text, tr)
+
+        # Subtle glow badge below text
+        badge = pygame.Surface((140, 6), pygame.SRCALPHA)
+        badge.fill((255, 220, 50, int(150 * fade)))
+        br = badge.get_rect(center=(self.screen_w // 2, self.screen_h // 2 - 55))
+        surface.blit(badge, br)
 
     def draw_game_over(self, surface, won, player, game_time):
         overlay = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
@@ -183,36 +204,88 @@ class UI:
         pr = prompt.get_rect(center=(self.screen_w // 2, 360))
         surface.blit(prompt, pr)
 
-    def draw_start_screen(self, surface):
-        surface.fill((10, 10, 15))
+    def draw_start_screen(self, surface, player_name="", input_active=True, cursor_visible=True):
+        # Background image
+        if self.menu_background:
+            surface.blit(self.menu_background, (0, 0))
+            # Darken overlay for readability
+            overlay = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 120))
+            surface.blit(overlay, (0, 0))
+        else:
+            surface.fill((10, 10, 15))
 
-        title = self.font_title.render("DEADLINE DUNGEON", True, (220, 50, 50))
-        tr = title.get_rect(center=(self.screen_w // 2, 150))
+        # Title with drop shadow for readability
+        title_shadow = self.font_title.render("DEADLINE DUNGEON", True, (0, 0, 0))
+        tr = title_shadow.get_rect(center=(self.screen_w // 2 + 3, 93))
+        surface.blit(title_shadow, tr)
+        title = self.font_title.render("DEADLINE DUNGEON", True, (230, 70, 70))
+        tr = title.get_rect(center=(self.screen_w // 2, 90))
         surface.blit(title, tr)
 
-        sub = self.font_md.render("Top-Down 2D Action RPG", True, self.GRAY)
-        sr = sub.get_rect(center=(self.screen_w // 2, 200))
+        sub = self.font_md.render("Top-Down 2D Action RPG", True, (220, 220, 220))
+        sr = sub.get_rect(center=(self.screen_w // 2, 135))
         surface.blit(sub, sr)
 
+        # Name input label
+        label = self.font_md.render("Enter your name:", True, (255, 220, 120))
+        lr = label.get_rect(center=(self.screen_w // 2, 185))
+        surface.blit(label, lr)
+
+        # Name input box
+        box_w, box_h = 360, 44
+        box_x = (self.screen_w - box_w) // 2
+        box_y = 205
+        # Semi-transparent box
+        box_surf = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        box_surf.fill((15, 15, 25, 220))
+        surface.blit(box_surf, (box_x, box_y))
+        border_color = (255, 220, 120) if input_active else (120, 120, 120)
+        pygame.draw.rect(surface, border_color, (box_x, box_y, box_w, box_h), 2,
+                         border_radius=4)
+
+        # Display name text + blinking cursor
+        display = player_name
+        if input_active and cursor_visible:
+            display = player_name + "_"
+        if not display:
+            display_text = self.font_md.render("(type name, then ENTER)", True, (120, 120, 120))
+        else:
+            display_text = self.font_md.render(display, True, self.WHITE)
+        dr = display_text.get_rect(midleft=(box_x + 12, box_y + box_h // 2))
+        surface.blit(display_text, dr)
+
+        # Controls panel (translucent)
+        panel_y = 275
+        panel_h = 180
+        panel_surf = pygame.Surface((440, panel_h), pygame.SRCALPHA)
+        panel_surf.fill((10, 10, 20, 180))
+        panel_x = (self.screen_w - 440) // 2
+        surface.blit(panel_surf, (panel_x, panel_y))
+        pygame.draw.rect(surface, (80, 80, 100),
+                         (panel_x, panel_y, 440, panel_h), 1, border_radius=4)
+
         controls = [
-            "WASD  -  Move",
-            "Mouse  -  Aim direction",
-            "Left Click  -  Attack",
-            "Right Click  -  Skill",
+            "WASD           -  Move",
+            "Mouse          -  Aim direction",
+            "Left Click     -  Attack",
+            "Right Click    -  Skill",
             "",
             "Reach Lv.30 and defeat the Elite Orc",
             "before the 10-minute deadline!",
-            "",
-            "No items  -  Heal only on Level Up!",
         ]
         for i, line in enumerate(controls):
             color = self.WHITE if line else self.GRAY
             text = self.font_sm.render(line, True, color)
-            tr = text.get_rect(center=(self.screen_w // 2, 270 + i * 24))
+            tr = text.get_rect(midleft=(panel_x + 20, panel_y + 20 + i * 22))
             surface.blit(text, tr)
 
-        prompt = self.font_lg.render("Press [SPACE] to Start", True, (255, 220, 80))
-        pr = prompt.get_rect(center=(self.screen_w // 2, 510))
+        # Start prompt (only enabled if name entered)
+        if player_name.strip():
+            prompt = self.font_lg.render("Press [ENTER] to Start", True, (255, 220, 80))
+        else:
+            prompt = self.font_md.render("(enter your name to begin)", True, (180, 180, 180))
+        pr = prompt.get_rect(center=(self.screen_w // 2, 490))
         surface.blit(prompt, pr)
 
     def draw_menu(self):

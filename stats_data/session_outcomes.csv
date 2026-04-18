@@ -1,2 +1,6 @@
 boss_defeated,final_level,player_class,session_id,time_survived,timed_out,timestamp,won
 Elite Orc,30,Wizard,1776435068,325.06,False,1776435404.1269271,True
+none,10,Soldier,1776453558,150.78,False,1776453710.2488086,False
+none,21,Wizard,1776453882,288.42,False,1776454173.1235104,False
+none,11,Soldier,kantee,1776455897,113.04,False,1776456017.5637925,False
+1776473987,kk,1776474450.84,False,30,457.31,Archer,none,False

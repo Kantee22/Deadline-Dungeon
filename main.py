@@ -25,6 +25,13 @@ class Game:
         self.clock = pygame.time.Clock()
         self.ui = UI(SCREEN_W, SCREEN_H)
         self.game_state = "start"
+
+        # Player name input state
+        self.player_name = ""
+        self.name_max_len = 14
+        self._cursor_blink_timer = 0.0
+        self._cursor_visible = True
+
         self._init_game()
 
     def _init_game(self):
@@ -49,7 +56,14 @@ class Game:
                 self._handle_event(event)
 
             if self.game_state == "start":
-                self.ui.draw_start_screen(self.screen)
+                # Blink cursor (toggle every 0.5s)
+                self._cursor_blink_timer += dt
+                if self._cursor_blink_timer >= 0.5:
+                    self._cursor_blink_timer = 0.0
+                    self._cursor_visible = not self._cursor_visible
+                self.ui.draw_start_screen(self.screen, self.player_name,
+                                          input_active=True,
+                                          cursor_visible=self._cursor_visible)
             elif self.game_state == "playing":
                 self._update(dt)
                 self._draw()
@@ -68,12 +82,26 @@ class Game:
     def _handle_event(self, event):
         if event.type == pygame.KEYDOWN:
             if self.game_state == "start":
-                if event.key == pygame.K_SPACE:
-                    self.game_state = "playing"
+                # Name input
+                if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    # Only start if name is non-empty
+                    if self.player_name.strip():
+                        self.stats.player_name = self.player_name.strip()
+                        self.game_state = "playing"
+                elif event.key == pygame.K_BACKSPACE:
+                    self.player_name = self.player_name[:-1]
+                else:
+                    # Accept printable characters
+                    ch = event.unicode
+                    if ch and ch.isprintable() and len(self.player_name) < self.name_max_len:
+                        # Allow letters, digits, space, basic punctuation
+                        if ch.isalnum() or ch in (" ", "_", "-", "."):
+                            self.player_name += ch
 
             elif self.game_state == "game_over":
                 if event.key == pygame.K_r:
                     self._init_game()
+                    self.stats.player_name = self.player_name.strip() or "Player"
                     self.game_state = "playing"
                 elif event.key == pygame.K_q:
                     self.stats.export_csv()
@@ -110,11 +138,11 @@ class Game:
     def _select_class(self, class_name):
         self.player.change_class(class_name)
         self.world.state = "playing"
-        self.stats.record_event("class_selection", {
-            "chosen_class": class_name,
-            "level": self.player.level,
-            "game_time": self.world.timer,
-        })
+        # Log class selection as a skill_usage row so it appears in stats
+        self.stats.record_skill_use(
+            "class_change_to_" + class_name,
+            class_name,
+            True, 0, self.world.timer)
 
     def _update(self, dt):
         if self.world.state == "class_select":
@@ -133,23 +161,32 @@ class Game:
 
         is_moving = dx != 0 or dy != 0
 
-        # Remember old position for axis-separated collision
+        # Hitbox is at the FEET (lower portion of sprite), not center
+        # Sprite is drawn with character's body upper half near y-center
+        # and feet ~14-16px below center. Hitbox represents physical footprint.
         old_x = self.player.x
         old_y = self.player.y
         self.player.move(dx, dy, dt, self.world.world_w, self.world.world_h)
 
-        # Axis-separated wall collision: lets player slide along walls
-        if self.world.tilemap.is_wall(self.player.x, self.player.y):
+        def has_wall_at(x, y):
+            """Check footprint box at the character's feet."""
+            tm = self.world.tilemap
+            fw = 10         # half-width of physical body (narrow)
+            foot_top = 4    # hitbox top = 4px below center
+            foot_bot = 22   # hitbox bottom = 22px below center (at feet)
+            return (tm.is_wall(x - fw, y + foot_top) or
+                    tm.is_wall(x + fw, y + foot_top) or
+                    tm.is_wall(x - fw, y + foot_bot) or
+                    tm.is_wall(x + fw, y + foot_bot))
+
+        if has_wall_at(self.player.x, self.player.y):
             new_x = self.player.x
             new_y = self.player.y
-            # Try horizontal movement only (revert Y)
-            if not self.world.tilemap.is_wall(new_x, old_y):
+            if not has_wall_at(new_x, old_y):
                 self.player.y = old_y
-            # Try vertical movement only (revert X)
-            elif not self.world.tilemap.is_wall(old_x, new_y):
+            elif not has_wall_at(old_x, new_y):
                 self.player.x = old_x
             else:
-                # Fully blocked in this direction — revert both
                 self.player.x = old_x
                 self.player.y = old_y
 
@@ -174,13 +211,18 @@ class Game:
                     True, self.player.level, self.world.timer,
                     self.player.class_type, "Elite Orc",
                     self.world.timeout_triggered)
+                # Export immediately so data is saved even if user force-closes
+                self.stats.export_csv(verbose=False)
 
         # Collision: Player projectiles/melee → Enemies
         self._check_player_attacks()
 
         # Collision: Enemies → Player
         for enemy in self.world.enemies:
-            damage = enemy.attack_player(self.player)
+            # Start attack if in range (this queues damage, returns 0)
+            enemy.attack_player(self.player)
+            # Release queued damage if animation timer hit
+            damage = enemy._release_pending_attack_if_due(dt, self.player)
             if damage > 0:
                 self.stats.record_damage_received(
                     enemy.attack, damage, enemy.enemy_type,
@@ -188,7 +230,8 @@ class Game:
                     self.player.max_hp, self.world.timer)
 
         for boss in self.world.bosses:
-            damage = boss.attack_player(self.player)
+            boss.attack_player(self.player)
+            damage = boss._release_pending_attack_if_due(dt, self.player)
             if damage > 0:
                 self.stats.record_damage_received(
                     boss.attack, damage, boss.boss_type,
@@ -239,6 +282,8 @@ class Game:
                 False, self.player.level, self.world.timer,
                 self.player.class_type, "none",
                 self.world.timeout_triggered)
+            # Export immediately so data is saved even if user force-closes
+            self.stats.export_csv(verbose=False)
 
         # Stats: periodic sampling
         self.stats.update(dt, self.player, self.world.timer)
