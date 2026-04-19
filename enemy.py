@@ -221,19 +221,19 @@ class Enemy:
         return 0
 
     def _compute_attack_release(self):
-        """Delay damage very close to end of attack animation.
-        Fire at the final frame so the hit syncs with the swing's impact.
+        """Delay damage to late in the attack animation.
+        Fire ~2 frames before end so damage connects visually with the swing
+        without feeling like it hits air (player had time to step away).
         """
         if self.has_sprites:
             key = f"attack_{self.direction}"
             anim = self.animator.animations.get(key)
             if anim and anim.frames:
                 total = len(anim.frames) * anim.frame_duration
-                # Fire 0.2 frame_durations before end (virtually the last frame)
                 min_release = anim.frame_duration * 2.0
-                desired = total - anim.frame_duration * 0.2
+                desired = total - anim.frame_duration * 2.0
                 return max(min_release, desired)
-        return 0.4
+        return 0.3
 
     def attack_player(self, player):
         """Start attack animation and queue damage to fire near the end."""

@@ -116,6 +116,23 @@ class Game:
                         self._select_class("Wizard")
                     elif event.key == pygame.K_3:
                         self._select_class("Archer")
+                else:
+                    # Keyboard alternatives for attack/skill (Mac users etc.)
+                    # Q = attack (like left click), E = skill (like right click)
+                    if event.key == pygame.K_q:
+                        result = self.player.left_click()
+                        if result:
+                            self.stats.record_skill_use(
+                                "attack", self.player.class_type,
+                                False, result.get("damage", 0),
+                                self.world.timer)
+                    elif event.key == pygame.K_e:
+                        result = self.player.right_click()
+                        if result:
+                            self.stats.record_skill_use(
+                                "skill", self.player.class_type,
+                                False, result.get("damage", 0),
+                                self.world.timer)
 
         # Mouse click for combat
         if event.type == pygame.MOUSEBUTTONDOWN and self.game_state == "playing":

@@ -266,10 +266,10 @@ class UI:
                          (panel_x, panel_y, 440, panel_h), 1, border_radius=4)
 
         controls = [
-            "WASD           -  Move",
-            "Mouse          -  Aim direction",
-            "Left Click     -  Attack",
-            "Right Click    -  Skill",
+            "WASD               -  Move",
+            "Mouse              -  Aim direction",
+            "Left Click / Q     -  Attack",
+            "Right Click / E    -  Skill",
             "",
             "Reach Lv.30 and defeat the Elite Orc",
             "before the 10-minute deadline!",

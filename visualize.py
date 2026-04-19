@@ -20,9 +20,13 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
 
+# ---------- Resolve paths relative to this script ----------
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 # ---------- Styling ----------
-DATA_DIR = "stats_data"
-OUT_DIR = "visualizations"
+DATA_DIR = os.path.join(_SCRIPT_DIR, "stats_data")
+OUT_DIR = os.path.join(_SCRIPT_DIR, "visualizations")
 
 # Dark dungeon-ish theme
 BG          = "#1a1620"
@@ -85,13 +89,28 @@ def apply_style():
 
 
 def load_csv(name):
-    """Load a CSV from stats_data/ (returns empty DataFrame if missing)."""
+    """Load a CSV from stats_data/ (returns empty DataFrame if missing or broken).
+
+    Tolerates files where rows have varying column counts — common when the
+    game was played with different versions of stats_collector.py. Bad rows
+    are skipped, good rows kept.
+    """
     path = os.path.join(DATA_DIR, f"{name}.csv")
     if not os.path.exists(path):
         print(f"  [!] Missing: {path}")
         return pd.DataFrame()
     try:
+        # First try strict (fast path)
         return pd.read_csv(path)
+    except pd.errors.ParserError:
+        # Schema mismatch — retry with tolerant parser
+        try:
+            df = pd.read_csv(path, on_bad_lines="skip", engine="python")
+            print(f"  [i] {name}.csv had mixed schemas — loaded {len(df)} valid rows")
+            return df
+        except Exception as e:
+            print(f"  [!] Failed to read {path}: {e}")
+            return pd.DataFrame()
     except Exception as e:
         print(f"  [!] Failed to read {path}: {e}")
         return pd.DataFrame()

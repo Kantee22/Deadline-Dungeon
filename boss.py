@@ -32,9 +32,9 @@ class Boss(Enemy):
         "final_boss": {
             "name": "Elite Orc",
             "hp": 1200, "attack": 35, "speed": 80, "exp": 500,
-            "size": 46, "color": (60, 120, 40), "atk_cd": 0.7,
+            "size": 38, "color": (60, 120, 40), "atk_cd": 0.7,
             "phases": 3, "sprite_folder": "EliteOrc",
-            "pixel_scale": 5.0,
+            "pixel_scale": 4.0,
         },
     }
 
@@ -99,13 +99,13 @@ class Boss(Enemy):
 
     def attack_player(self, player):
         """Elite Orc has a radial spin attack - hits all around at once.
-        Other bosses use the normal enemy attack.
+        Other bosses use the normal enemy attack (inherits pending_attack pattern).
         """
         if self.boss_type != "final_boss":
             return super().attack_player(player)
 
         # Final boss radial attack: bigger range, no facing requirement
-        if (not self.alive or self._attack_timer > 0
+        if (not self.alive or self._attack_timer > 0 or self._pending_attack
                 or self._is_dying or self._using_special):
             return 0
 
@@ -118,8 +118,12 @@ class Boss(Enemy):
                 self.animator.set_direction(self.direction)
             self._update_animation("attack")
 
-            damage = player.take_damage(self.attack)
-            return damage
+            # Queue damage to fire mid/late animation instead of instant
+            self._pending_attack = {
+                "release_in": self._compute_attack_release(),
+                "damage": self.attack,
+                "range": spin_radius + 25,  # a bit forgiving for player movement
+            }
         return 0
 
     def phase_transition(self):
@@ -262,13 +266,13 @@ class Boss(Enemy):
             })
 
         elif kind == "charge_dash":
-            # Damage at where boss stopped
+            # Damage at where boss stopped (bigger radius so lunge bite feels wider)
             self._special_effects.append({
                 "type": "boss_melee",
                 "x": self.x, "y": self.y,
-                "radius": 95,
+                "radius": 140,
                 "damage": pending["damage"],
-                "timer": 0.25, "life": 0.25,
+                "timer": 0.3, "life": 0.3,
                 "hit": False,
                 "color": (200, 50, 50),
             })

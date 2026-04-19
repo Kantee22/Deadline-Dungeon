@@ -21,10 +21,15 @@ import time
 from datetime import datetime
 
 
+# Resolve DATA_DIR relative to this script so CSV is always saved to the
+# same place regardless of current working directory (e.g. running from PyCharm)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 class StatsCollector:
     """Collects and persists gameplay statistics to CSV files."""
 
-    DATA_DIR = "stats_data"
+    DATA_DIR = os.path.join(_SCRIPT_DIR, "stats_data")
 
     # Ordered column definitions for each CSV file
     # First 3 columns are always: session_id, player_name, timestamp
@@ -71,6 +76,11 @@ class StatsCollector:
     def __init__(self):
         self.records = {name: [] for name in self.FIELD_ORDER.keys()}
 
+        # Track how many records have been exported per feature (cursor).
+        # export_csv() writes records[cursor:] and advances the cursor,
+        # so no row is written twice and in-memory state is preserved.
+        self._export_cursor = {name: 0 for name in self.FIELD_ORDER.keys()}
+
         # Session info
         self.session_id = int(time.time())
         self.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -90,9 +100,9 @@ class StatsCollector:
         self._exp_sample_timer = 0.0
         self._exp_sample_interval = 3.0
 
-        # Auto-save timer (flush to disk every 30s to prevent data loss)
+        # Auto-save timer (flush every 15s so crashes don't lose data)
         self._autosave_timer = 0.0
-        self._autosave_interval = 30.0
+        self._autosave_interval = 15.0
 
         os.makedirs(self.DATA_DIR, exist_ok=True)
 
@@ -230,12 +240,15 @@ class StatsCollector:
 
     # -------- CSV Export --------
     def export_csv(self, verbose=True):
-        """Append all pending records to CSV files.
-        After export, clears in-memory records so next auto-save doesn't duplicate.
+        """Append new records (since last export) to CSV files.
+        Uses a cursor per feature so rows are written exactly once.
+        Records stay in memory so summaries/leaderboard keep working.
         """
         total_exported = 0
         for feature_name, records in self.records.items():
-            if not records:
+            cursor = self._export_cursor.get(feature_name, 0)
+            new_records = records[cursor:]
+            if not new_records:
                 continue
 
             filepath = os.path.join(self.DATA_DIR, f"{feature_name}.csv")
@@ -248,21 +261,22 @@ class StatsCollector:
                         f, fieldnames=fields, extrasaction="ignore")
                     if not file_exists:
                         writer.writeheader()
-                    writer.writerows(records)
-                total_exported += len(records)
+                    writer.writerows(new_records)
+                total_exported += len(new_records)
+                # Advance cursor so we don't re-export these rows
+                self._export_cursor[feature_name] = len(records)
             except (IOError, OSError) as e:
                 if verbose:
                     print(f"[StatsCollector] Failed to write {feature_name}.csv: {e}")
                 continue
 
-            # Clear in-memory records after successful export
-            self.records[feature_name] = []
-
-        # Also write/update leaderboard summary
+        # Always update leaderboard (it uses instance aggregates, not records list)
         self._export_leaderboard()
 
         if verbose:
-            print(f"[StatsCollector] Exported {total_exported} records to {self.DATA_DIR}/")
+            total_in_memory = sum(len(r) for r in self.records.values())
+            print(f"[StatsCollector] Exported {total_exported} new rows "
+                  f"({total_in_memory} total tracked) → {self.DATA_DIR}/")
 
     def _export_leaderboard(self):
         """Append or update this session's row in leaderboard.csv."""
