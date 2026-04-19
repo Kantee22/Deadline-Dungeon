@@ -142,80 +142,161 @@ def empty_message(ax, message="No data available"):
 # ---------- Visualization functions (one per feature) ----------
 
 def viz_damage_dealt(ax):
-    """Feature 1: Histogram of damage dealt per attack."""
+    """Feature 1: Histogram of damage dealt, optionally grouped by class."""
     df = load_csv("damage_dealt")
     style_axis(ax, "1. Damage Dealt Per Attack",
                 xlabel="Damage", ylabel="Frequency")
     if df.empty or "damage" not in df.columns:
         empty_message(ax); return
 
-    ax.hist(df["damage"], bins=25, color=ACCENT_RED, edgecolor=BG, alpha=0.9)
+    df = df.copy()
+    df["damage"] = pd.to_numeric(df["damage"], errors="coerce")
+    df = df.dropna(subset=["damage"])
+    if df.empty:
+        empty_message(ax); return
+
+    # Clip to 95th percentile
+    p95 = df["damage"].quantile(0.95)
+    clipped = df[df["damage"] <= p95]
+    outliers = len(df) - len(clipped)
+
+    # If we have class info, stack by class. Otherwise simple histogram.
+    if "player_class" in clipped.columns and clipped["player_class"].nunique() > 1:
+        bins = 20
+        classes = sorted(clipped["player_class"].dropna().unique())
+        data_per_class = [clipped[clipped["player_class"] == c]["damage"].values
+                           for c in classes]
+        colors = [CLASS_COLORS.get(c, MUTED) for c in classes]
+        ax.hist(data_per_class, bins=bins, color=colors, edgecolor=BG,
+                 stacked=True, label=classes, alpha=0.95)
+        ax.legend(title="Class", fontsize=8, title_fontsize=9,
+                  loc="upper right", frameon=True, framealpha=0.85)
+    else:
+        ax.hist(clipped["damage"], bins=20, color=ACCENT_RED,
+                edgecolor=BG, alpha=0.9)
 
     mean = df["damage"].mean()
-    ax.axvline(mean, color=ACCENT_GOLD, linestyle="--", linewidth=2,
-               label=f"Mean: {mean:.1f}")
-    ax.legend(loc="upper right")
+    ax.axvline(mean, color=ACCENT_GOLD, linestyle="--", linewidth=2)
+
+    # Summary annotation
+    note = f"μ={mean:.1f}  ·  n={len(df)}"
+    if outliers > 0:
+        note += f"  ·  {outliers} outliers hidden"
+    ax.text(0.02, 0.98, note, transform=ax.transAxes,
+            ha="left", va="top", color=MUTED, fontsize=9,
+            bbox={"facecolor": PANEL_BG, "edgecolor": GRID, "alpha": 0.85,
+                   "pad": 4, "boxstyle": "round,pad=0.4"})
 
 
 def viz_damage_received(ax):
-    """Feature 2: Bar chart of damage received, grouped by enemy type."""
+    """Feature 2: Horizontal bar chart of damage received, grouped by enemy type."""
     df = load_csv("damage_received")
     style_axis(ax, "2. Damage Received Per Enemy Type",
-                xlabel="Enemy type", ylabel="Total damage received")
+                xlabel="Total damage received", ylabel="")
     if df.empty or "enemy_type" not in df.columns:
         empty_message(ax); return
 
-    totals = df.groupby("enemy_type")["actual_damage"].sum().sort_values(ascending=False)
+    totals = df.groupby("enemy_type")["actual_damage"].sum().sort_values()
     colors = [ENEMY_COLORS.get(e, MUTED) for e in totals.index]
-    bars = ax.bar(totals.index, totals.values, color=colors, edgecolor=BG)
+    bars = ax.barh(totals.index, totals.values, color=colors, edgecolor=BG)
     for bar, v in zip(bars, totals.values):
-        ax.text(bar.get_x() + bar.get_width()/2, v, f"{int(v)}",
-                ha="center", va="bottom", color=FG, fontsize=9)
-    plt.setp(ax.get_xticklabels(), rotation=20, ha="right")
+        ax.text(v, bar.get_y() + bar.get_height() / 2, f" {int(v)}",
+                ha="left", va="center", color=FG, fontsize=10, fontweight="bold")
+    # Remove y-axis labels clutter
+    ax.tick_params(axis="y", length=0, labelsize=10)
+    # Make room for the numbers
+    xlim = ax.get_xlim()
+    ax.set_xlim(0, xlim[1] * 1.15)
 
 
 def viz_kills_per_level(ax):
-    """Feature 3: Stacked bar chart of kills per level, split by enemy type."""
+    """Feature 3: Stacked bar chart of kills per level range."""
     df = load_csv("kills_per_level")
-    style_axis(ax, "3. Enemies Defeated Per Level",
-                xlabel="Player level", ylabel="Enemies killed")
+    style_axis(ax, "3. Enemies Defeated Per Level Range",
+                xlabel="Level range", ylabel="Enemies killed")
     if df.empty or "player_level" not in df.columns:
         empty_message(ax); return
 
-    pivot = df.groupby(["player_level", "enemy_type"]).size().unstack(fill_value=0)
-    # Order columns consistently
+    # Group levels into ranges 1-5, 6-10, 11-15, 16-20, 21-25, 26-30
+    df = df.copy()
+    df["player_level"] = pd.to_numeric(df["player_level"], errors="coerce")
+    df = df.dropna(subset=["player_level"])
+
+    def level_range(lv):
+        lv = int(lv)
+        if lv <= 5:   return "1-5"
+        if lv <= 10:  return "6-10"
+        if lv <= 15:  return "11-15"
+        if lv <= 20:  return "16-20"
+        if lv <= 25:  return "21-25"
+        return "26-30"
+    df["range"] = df["player_level"].apply(level_range)
+
+    pivot = df.groupby(["range", "enemy_type"]).size().unstack(fill_value=0)
+
+    # Make sure ranges are in order
+    range_order = ["1-5", "6-10", "11-15", "16-20", "21-25", "26-30"]
+    pivot = pivot.reindex([r for r in range_order if r in pivot.index])
+
+    # Order enemy columns
     order = ["slime", "skeleton", "orc",
              "mini_boss_1", "mini_boss_2", "final_boss"]
     cols = [c for c in order if c in pivot.columns] + \
            [c for c in pivot.columns if c not in order]
     pivot = pivot[cols]
+
     colors = [ENEMY_COLORS.get(c, MUTED) for c in pivot.columns]
     pivot.plot(kind="bar", stacked=True, ax=ax, color=colors,
-               edgecolor=BG, width=0.85)
-    ax.legend(loc="upper left", fontsize=8, title="Enemy", title_fontsize=9)
-    ax.tick_params(axis="x", rotation=0)
+               edgecolor=BG, width=0.75)
+    ax.legend(loc="upper right", fontsize=8, title="Enemy", title_fontsize=9,
+              frameon=True, framealpha=0.85)
+    ax.tick_params(axis="x", rotation=0, labelsize=10)
 
 
 def viz_hp_over_time(ax):
-    """Feature 4: Line chart of HP over time (one line per session)."""
+    """Feature 4: Line chart of HP over time (top 5 longest sessions)."""
     df = load_csv("hp_over_time")
     style_axis(ax, "4. Player HP Over Time",
                 xlabel="Game time (s)", ylabel="HP ratio (0-1)")
     if df.empty or "game_time" not in df.columns:
         empty_message(ax); return
 
-    sessions = df["session_id"].unique()
+    # Keep only numeric game_time rows
+    df = df.copy()
+    df["game_time"] = pd.to_numeric(df["game_time"], errors="coerce")
+    df["hp_ratio"] = pd.to_numeric(df["hp_ratio"], errors="coerce")
+    df = df.dropna(subset=["game_time", "hp_ratio"])
+    if df.empty:
+        empty_message(ax); return
+
+    # Find top 5 longest sessions
+    session_lengths = df.groupby("session_id")["game_time"].max().sort_values(ascending=False)
+    top_sessions = session_lengths.head(5).index.tolist()
+
     palette = [ACCENT_RED, ACCENT_BLUE, ACCENT_GREEN,
-               ACCENT_PURPLE, ACCENT_ORANGE, ACCENT_GOLD]
-    for i, sid in enumerate(sessions):
+               ACCENT_PURPLE, ACCENT_ORANGE]
+    for i, sid in enumerate(top_sessions):
         sub = df[df["session_id"] == sid].sort_values("game_time")
-        name = sub["player_name"].iloc[0] if "player_name" in sub.columns else f"S{sid}"
+        # Use player_name if available and non-empty, else session id short
+        if "player_name" in sub.columns:
+            names = sub["player_name"].dropna().unique()
+            names = [n for n in names if n and str(n).strip()]
+            label = str(names[0]) if names else f"Session {str(sid)[-4:]}"
+        else:
+            label = f"Session {str(sid)[-4:]}"
+
         ax.plot(sub["game_time"], sub["hp_ratio"],
-                color=palette[i % len(palette)], alpha=0.85, linewidth=1.7,
-                label=f"{name} (S{sid})")
+                color=palette[i % len(palette)], alpha=0.9, linewidth=2,
+                label=label)
 
     ax.set_ylim(0, 1.05)
-    ax.legend(loc="lower left", fontsize=7, ncol=2)
+    total_sessions = len(session_lengths)
+    if total_sessions > 5:
+        ax.legend(loc="lower left", fontsize=9,
+                  title=f"Top 5 / {total_sessions} sessions",
+                  title_fontsize=9, frameon=True, framealpha=0.85)
+    else:
+        ax.legend(loc="lower left", fontsize=9, frameon=True, framealpha=0.85)
 
 
 def viz_skill_usage(ax):
@@ -240,13 +321,13 @@ def viz_skill_usage(ax):
 
 
 def viz_session_outcomes(ax):
-    """Feature 6: Win/loss outcome pie + stats table."""
+    """Feature 6: Donut chart showing win rate + summary."""
     df = load_csv("session_outcomes")
     style_axis(ax, "6. Session Outcomes")
     if df.empty or "won" not in df.columns:
         empty_message(ax); return
 
-    # Normalize 'won' column (could be True/False or string)
+    df = df.copy()
     df["won_str"] = df["won"].astype(str).str.lower().map(
         {"true": "Victory", "false": "Defeat"})
 
@@ -254,55 +335,98 @@ def viz_session_outcomes(ax):
     colors_map = {"Victory": ACCENT_GOLD, "Defeat": ACCENT_RED}
     colors = [colors_map.get(k, MUTED) for k in counts.index]
 
-    ax.pie(counts.values, labels=counts.index, colors=colors,
-           autopct="%1.0f%%", startangle=90,
-           textprops={"color": FG, "fontsize": 10, "fontweight": "bold"},
-           wedgeprops={"edgecolor": BG, "linewidth": 2})
+    # Donut chart (pie with hole)
+    wedges, texts, autotexts = ax.pie(
+        counts.values, labels=counts.index, colors=colors,
+        autopct="%1.0f%%", startangle=90,
+        textprops={"color": FG, "fontsize": 11, "fontweight": "bold"},
+        wedgeprops={"edgecolor": BG, "linewidth": 2, "width": 0.38},
+        pctdistance=0.82,
+    )
+    for t in autotexts:
+        t.set_color(BG)
+        t.set_fontweight("bold")
 
-    # Below pie: summary text
+    # Center of donut: big win rate number
     n = len(df)
     wins = int((df["won_str"] == "Victory").sum())
+    win_rate = wins / n * 100 if n > 0 else 0
+    ax.text(0, 0.08, f"{win_rate:.0f}%", ha="center", va="center",
+            color=ACCENT_GOLD, fontsize=22, fontweight="bold")
+    ax.text(0, -0.13, "win rate", ha="center", va="center",
+            color=MUTED, fontsize=9)
+
+    # Below: stats line
+    df["time_survived"] = pd.to_numeric(df.get("time_survived"), errors="coerce")
+    df["final_level"] = pd.to_numeric(df.get("final_level"), errors="coerce")
     avg_level = df["final_level"].mean()
     avg_time = df["time_survived"].mean()
     stats_text = (f"{n} sessions · {wins} wins\n"
-                   f"Avg level: {avg_level:.1f} · Avg time: {avg_time:.0f}s")
-    ax.text(0.5, -0.15, stats_text, transform=ax.transAxes,
+                   f"avg Lv.{avg_level:.1f} · {avg_time:.0f}s survived")
+    ax.text(0.5, -0.17, stats_text, transform=ax.transAxes,
             ha="center", va="top", color=MUTED, fontsize=9)
 
 
 def viz_exp_over_time(ax):
-    """Feature 7: Scatter of EXP gained over time, colored by source enemy."""
+    """Feature 7: Cumulative EXP over time per session (top 5 longest)."""
     df = load_csv("exp_over_time")
     style_axis(ax, "7. EXP Earned Over Time",
-                xlabel="Game time (s)", ylabel="Total EXP")
+                xlabel="Game time (s)", ylabel="Cumulative EXP")
     if df.empty or "game_time" not in df.columns:
         empty_message(ax); return
 
-    # Use only 'gain' rows if the event_type column exists
+    df = df.copy()
+    df["game_time"] = pd.to_numeric(df["game_time"], errors="coerce")
+    df = df.dropna(subset=["game_time"])
+
+    # Use only 'gain' rows if event_type column exists
     if "event_type" in df.columns:
-        gains = df[df["event_type"] == "gain"]
+        gains = df[df["event_type"] == "gain"].copy()
+    elif "exp_gained" in df.columns:
+        gains = df.copy()
+        gains["exp_gained"] = pd.to_numeric(gains["exp_gained"], errors="coerce").fillna(0)
+        gains = gains[gains["exp_gained"] > 0]
     else:
-        gains = df[df.get("exp_gained", 0) > 0] if "exp_gained" in df.columns else df
+        gains = df.copy()
 
-    if gains.empty:
-        gains = df
+    if gains.empty or "exp_gained" not in gains.columns:
+        empty_message(ax, "No EXP data available"); return
 
-    if "source_enemy" in gains.columns:
-        for src, sub in gains.groupby("source_enemy"):
-            if not src or pd.isna(src):
-                continue
-            color = ENEMY_COLORS.get(src, MUTED)
-            ax.scatter(sub["game_time"], sub["total_exp"],
-                       color=color, alpha=0.7, s=25, edgecolor=BG,
-                       linewidth=0.5, label=src)
-        ax.legend(fontsize=8, loc="upper left", ncol=2)
-    else:
-        ax.scatter(gains["game_time"], gains["total_exp"],
-                   color=ACCENT_BLUE, alpha=0.6)
+    gains["exp_gained"] = pd.to_numeric(gains["exp_gained"], errors="coerce").fillna(0)
+
+    # Top 5 longest sessions by game_time span
+    session_lengths = gains.groupby("session_id")["game_time"].max().sort_values(ascending=False)
+    top_sessions = session_lengths.head(5).index.tolist()
+
+    palette = [ACCENT_RED, ACCENT_BLUE, ACCENT_GREEN,
+               ACCENT_PURPLE, ACCENT_ORANGE]
+    for i, sid in enumerate(top_sessions):
+        sub = gains[gains["session_id"] == sid].sort_values("game_time").copy()
+        sub["cumulative"] = sub["exp_gained"].cumsum()
+
+        if "player_name" in sub.columns:
+            names = sub["player_name"].dropna().unique()
+            names = [n for n in names if n and str(n).strip()]
+            label = str(names[0]) if names else f"Session {str(sid)[-4:]}"
+        else:
+            label = f"Session {str(sid)[-4:]}"
+
+        ax.plot(sub["game_time"], sub["cumulative"],
+                color=palette[i % len(palette)], alpha=0.9, linewidth=2,
+                label=label)
+        # Mark individual gains with dots
+        ax.scatter(sub["game_time"], sub["cumulative"],
+                   color=palette[i % len(palette)], s=15, alpha=0.5,
+                   edgecolor="none")
+
+    total_sessions = len(session_lengths)
+    title = f"Top 5 / {total_sessions} sessions" if total_sessions > 5 else None
+    ax.legend(loc="upper left", fontsize=9, title=title, title_fontsize=9,
+              frameon=True, framealpha=0.85)
 
 
 def viz_death_cause(ax):
-    """Feature 8: Pie chart of what killed the player."""
+    """Feature 8: Donut chart of what killed the player."""
     df = load_csv("death_cause")
     style_axis(ax, "8. Player Death Causes")
     if df.empty or "killer_type" not in df.columns:
@@ -310,18 +434,35 @@ def viz_death_cause(ax):
 
     counts = df["killer_type"].value_counts()
     colors = [ENEMY_COLORS.get(k, MUTED) for k in counts.index]
-    ax.pie(counts.values, labels=counts.index, colors=colors,
-           autopct="%1.0f%%", startangle=90,
-           textprops={"color": FG, "fontsize": 10, "fontweight": "bold"},
-           wedgeprops={"edgecolor": BG, "linewidth": 2})
-    ax.text(0.5, -0.1, f"{len(df)} deaths total", transform=ax.transAxes,
-            ha="center", va="top", color=MUTED, fontsize=9)
+    wedges, texts, autotexts = ax.pie(
+        counts.values, labels=counts.index, colors=colors,
+        autopct="%1.0f%%", startangle=90,
+        textprops={"color": FG, "fontsize": 10, "fontweight": "bold"},
+        wedgeprops={"edgecolor": BG, "linewidth": 2, "width": 0.38},
+        pctdistance=0.82,
+    )
+    for t in autotexts:
+        t.set_color(BG)
+        t.set_fontweight("bold")
+
+    # Count in center
+    ax.text(0, 0.05, f"{len(df)}", ha="center", va="center",
+            color=ACCENT_RED, fontsize=22, fontweight="bold")
+    ax.text(0, -0.12, "deaths", ha="center", va="center",
+            color=MUTED, fontsize=9)
+
+    # Top killer below
+    top_killer = counts.index[0]
+    top_pct = counts.values[0] / counts.sum() * 100
+    ax.text(0.5, -0.15, f"Most deadly: {top_killer} ({top_pct:.0f}%)",
+            transform=ax.transAxes, ha="center", va="top",
+            color=MUTED, fontsize=9)
 
 
 def viz_leaderboard(ax):
-    """Bonus: Top 10 leaderboard table."""
+    """Bonus: Top 10 leaderboard - best session per player."""
     df = load_csv("leaderboard")
-    style_axis(ax, "Leaderboard — Top 10")
+    style_axis(ax, "Leaderboard — Top Players")
     if df.empty or "player_name" not in df.columns:
         empty_message(ax); return
 
@@ -329,21 +470,29 @@ def viz_leaderboard(ax):
     df_sorted["peak_level"] = df_sorted["peak_level"].astype(int)
     df_sorted["total_kills"] = df_sorted["total_kills"].astype(int)
     df_sorted["total_damage_dealt"] = df_sorted["total_damage_dealt"].astype(int)
+
+    # Count sessions per player for the "Games" column
+    session_counts = df_sorted["player_name"].value_counts().to_dict()
+
+    # Keep only the BEST session per player (by peak_level → kills → damage)
     df_sorted = df_sorted.sort_values(
         ["peak_level", "total_kills", "total_damage_dealt"],
-        ascending=[False, False, False]).head(10)
+        ascending=[False, False, False])
+    df_sorted = df_sorted.drop_duplicates(subset=["player_name"], keep="first").head(10)
 
     ax.axis("off")
-    headers = ["#", "Player", "Lv.", "Kills", "Dmg", "Bosses"]
+    headers = ["#", "Player", "Lv.", "Kills", "Dmg", "Bosses", "Games"]
     rows = []
     for i, (_, r) in enumerate(df_sorted.iterrows(), 1):
+        name = str(r.get("player_name", "?"))
         rows.append([
             f"{i}",
-            str(r.get("player_name", "?"))[:12],
+            name[:12],
             f"{int(r['peak_level'])}",
             f"{int(r['total_kills'])}",
             f"{int(r['total_damage_dealt'])}",
             f"{int(r.get('boss_kills', 0))}",
+            f"{session_counts.get(name, 1)}",
         ])
 
     table = ax.table(cellText=rows, colLabels=headers,

@@ -581,15 +581,6 @@ class Player:
                                (*effect["color"], alpha),
                                (radius, radius), radius)
             surface.blit(aoe_surf, (int(ex) - radius, int(ey) - radius))
-
-        # Melee swings visual
-        for effect in self.active_effects:
-            if effect["type"] != "melee":
-                continue
-            ex = effect["x"] - camera_x
-            ey = effect["y"] - camera_y
-            alpha = int(180 * (effect["timer"] / 0.2))
-            r = effect.get("radius", 50)
-            arc_surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-            pygame.draw.circle(arc_surf, (255, 255, 255, alpha), (r, r), r, 4)
-            surface.blit(arc_surf, (int(ex) - r, int(ey) - r))
+        # Note: Melee hitboxes are invisible — the sword swing animation
+        # is the visual feedback. The hit is still applied via active_effects
+        # in main.py's _check_player_attacks().
