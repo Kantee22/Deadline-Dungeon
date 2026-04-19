@@ -21,7 +21,16 @@ class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption(TITLE)
-        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        # Use SCALED + DOUBLEBUF for consistent rendering on Mac/Retina displays.
+        # SCALED tells pygame to scale the logical 780x720 surface to whatever
+        # the display actually renders at, preventing stale-buffer artifacts
+        # and incorrect window sizing on high-DPI screens.
+        flags = pygame.SCALED | pygame.DOUBLEBUF
+        try:
+            self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), flags, vsync=1)
+        except pygame.error:
+            # Fallback if the display doesn't support vsync=1
+            self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), flags)
         self.clock = pygame.time.Clock()
         self.ui = UI(SCREEN_W, SCREEN_H)
         self.game_state = "start"

@@ -80,7 +80,17 @@ class TileMap:
         for p in search_paths:
             if os.path.exists(p):
                 try:
-                    self.tileset = pygame.image.load(p).convert_alpha()
+                    raw = pygame.image.load(p)
+                    # Safe alpha conversion for Mac/SCALED compatibility
+                    if raw.get_bitsize() != 32 or not (raw.get_flags() & pygame.SRCALPHA):
+                        converted = pygame.Surface(raw.get_size(), pygame.SRCALPHA, 32)
+                        converted.blit(raw, (0, 0))
+                        self.tileset = converted
+                    else:
+                        try:
+                            self.tileset = raw.convert_alpha()
+                        except pygame.error:
+                            self.tileset = raw
                     break
                 except pygame.error:
                     continue
@@ -259,8 +269,18 @@ class TileMap:
         return x, y
 
     def draw(self, surface, camera_x, camera_y, screen_w, screen_h):
+        """Draw the tilemap. Fills the full screen; any area outside the map
+        bounds is filled with a dark void color so we never see uninitialized
+        pixels (important on Mac Retina/SCALED surfaces)."""
+        # Start with a solid background fill so no stale pixels show
+        surface.fill((10, 8, 12))
+
+        map_rect = pygame.Rect(0, 0, self.world_w, self.world_h)
         src_rect = pygame.Rect(int(camera_x), int(camera_y), screen_w, screen_h)
-        src_rect.clamp_ip(pygame.Rect(0, 0, self.world_w, self.world_h))
-        dest_x = -int(camera_x - src_rect.x)
-        dest_y = -int(camera_y - src_rect.y)
-        surface.blit(self.map_surface, (dest_x, dest_y), src_rect)
+        clipped = src_rect.clip(map_rect)
+        if clipped.width <= 0 or clipped.height <= 0:
+            return
+
+        dest_x = clipped.x - int(camera_x)
+        dest_y = clipped.y - int(camera_y)
+        surface.blit(self.map_surface, (dest_x, dest_y), clipped)

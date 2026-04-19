@@ -240,7 +240,22 @@ class SpriteAnimator:
         raw_frames = []
         for filepath in files:
             try:
-                img = pygame.image.load(filepath).convert_alpha()
+                img = pygame.image.load(filepath)
+                # Force explicit per-pixel alpha. convert_alpha() can produce
+                # broken surfaces on some Mac/Retina setups when combined
+                # with pygame.SCALED (sprites render as opaque black rects).
+                # Creating an explicit 32-bit RGBA surface avoids this issue.
+                if img.get_bitsize() != 32 or not (img.get_flags() & pygame.SRCALPHA):
+                    converted = pygame.Surface(img.get_size(), pygame.SRCALPHA, 32)
+                    converted.blit(img, (0, 0))
+                    img = converted
+                else:
+                    # Already RGBA32 — still run convert_alpha for perf but
+                    # catch any platform-specific issues
+                    try:
+                        img = img.convert_alpha()
+                    except pygame.error:
+                        pass
                 raw_frames.append(img)
             except pygame.error:
                 continue

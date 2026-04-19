@@ -25,7 +25,13 @@ class UI:
         bg_path = os.path.join("images", "menu", "menu_background.png")
         if os.path.exists(bg_path):
             try:
-                raw = pygame.image.load(bg_path).convert_alpha()
+                raw = pygame.image.load(bg_path)
+                # Menu background doesn't need alpha but we still use the
+                # safe conversion pattern for consistency with sprites
+                try:
+                    raw = raw.convert()
+                except pygame.error:
+                    pass
                 # Scale to screen size
                 self.menu_background = pygame.transform.scale(
                     raw, (screen_w, screen_h))
