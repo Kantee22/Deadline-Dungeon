@@ -1,38 +1,20 @@
-"""
-stats_collector.py - StatsCollector class for Deadline Dungeon
-Collects, stores, and exports gameplay statistics to CSV files.
-
-Exports 9 CSV files to the `stats_data/` folder:
-1. damage_dealt.csv         - every hit player lands
-2. damage_received.csv      - every hit player takes
-3. kills_per_level.csv      - every enemy killed
-4. hp_over_time.csv         - HP sampled every 2s
-5. skill_usage.csv          - every click (attack / skill)
-6. session_outcomes.csv     - win/loss summary per session
-7. exp_over_time.csv        - EXP gain events + periodic snapshots
-8. death_cause.csv          - what killed the player
-9. leaderboard.csv          - aggregated per-session stats for ranking
-
-All rows include `session_id`, `player_name`, and `timestamp` for joining.
-"""
+"""stats_collector.py - Record gameplay events and export them to CSVs in stats_data/."""
 import csv
 import os
 import time
 from datetime import datetime
 
 
-# Resolve DATA_DIR relative to this script so CSV is always saved to the
-# same place regardless of current working directory (e.g. running from PyCharm)
+# Anchor DATA_DIR to this file so CSVs save next to the code, not cwd.
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class StatsCollector:
-    """Collects and persists gameplay statistics to CSV files."""
+    """In-memory stats buffer + CSV exporter."""
 
     DATA_DIR = os.path.join(_SCRIPT_DIR, "stats_data")
 
-    # Ordered column definitions for each CSV file
-    # First 3 columns are always: session_id, player_name, timestamp
+    # Column order per CSV file (first 3 cols always session_id/name/timestamp).
     FIELD_ORDER = {
         "damage_dealt": [
             "session_id", "player_name", "timestamp",
@@ -76,44 +58,42 @@ class StatsCollector:
     def __init__(self):
         self.records = {name: [] for name in self.FIELD_ORDER.keys()}
 
-        # Track how many records have been exported per feature (cursor).
-        # export_csv() writes records[cursor:] and advances the cursor,
-        # so no row is written twice and in-memory state is preserved.
+        # Cursor per feature: export_csv() writes records[cursor:] then advances.
         self._export_cursor = {name: 0 for name in self.FIELD_ORDER.keys()}
 
-        # Session info
+        # Session identity.
         self.session_id = int(time.time())
         self.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.player_name = "Player"
 
-        # Aggregated stats (for leaderboard)
+        # Aggregates for leaderboard row.
         self.total_damage_dealt = 0
         self.total_damage_received = 0
         self.total_kills = 0
         self.peak_level = 1
         self.kills_by_type = {}
 
-        # Sampling timers
+        # Periodic sampling timers.
         self._kills_at_level = {}
         self._hp_sample_timer = 0.0
         self._hp_sample_interval = 2.0
         self._exp_sample_timer = 0.0
         self._exp_sample_interval = 3.0
 
-        # Auto-save timer (flush every 15s so crashes don't lose data)
+        # Auto-flush so a crash doesn't lose data.
         self._autosave_timer = 0.0
         self._autosave_interval = 15.0
 
         os.makedirs(self.DATA_DIR, exist_ok=True)
 
     def _record_event(self, event_type, data):
-        """Append a record with common fields."""
+        """Append a row with common session fields filled in."""
         data["session_id"] = self.session_id
         data["player_name"] = self.player_name
         data["timestamp"] = round(time.time(), 2)
         self.records[event_type].append(data)
 
-    # -------- Feature 1: Damage Dealt --------
+    # -- Damage dealt --
     def record_damage_dealt(self, damage, skill_name, player_class, enemy_type, player_level):
         self._record_event("damage_dealt", {
             "damage": damage,
@@ -124,7 +104,7 @@ class StatsCollector:
         })
         self.total_damage_dealt += damage
 
-    # -------- Feature 2: Damage Received --------
+    # -- Damage received --
     def record_damage_received(self, raw_damage, actual_damage, enemy_type,
                                 player_level, player_hp, player_max_hp, game_time):
         self._record_event("damage_received", {
@@ -138,7 +118,7 @@ class StatsCollector:
         })
         self.total_damage_received += actual_damage
 
-    # -------- Feature 3: Kills Per Level --------
+    # -- Kills per level --
     def record_kill(self, enemy_type, player_level, game_time):
         self._kills_at_level[player_level] = self._kills_at_level.get(player_level, 0) + 1
         self._record_event("kills_per_level", {
@@ -151,7 +131,7 @@ class StatsCollector:
         self.kills_by_type[enemy_type] = self.kills_by_type.get(enemy_type, 0) + 1
         self.peak_level = max(self.peak_level, player_level)
 
-    # -------- Feature 4: HP Over Time --------
+    # -- HP over time --
     def record_hp_sample(self, current_hp, max_hp, game_time, player_level):
         self._record_event("hp_over_time", {
             "current_hp": current_hp,
@@ -161,7 +141,7 @@ class StatsCollector:
             "game_time": round(game_time, 2),
         })
 
-    # -------- Feature 5: Skill Usage --------
+    # -- Skill usage --
     def record_skill_use(self, skill_name, player_class, hit, damage, game_time):
         self._record_event("skill_usage", {
             "skill_name": skill_name,
@@ -171,7 +151,7 @@ class StatsCollector:
             "game_time": round(game_time, 2),
         })
 
-    # -------- Feature 6: Session Outcomes --------
+    # -- Session outcomes --
     def record_session_outcome(self, won, final_level, time_survived,
                                 player_class, boss_defeated, timed_out):
         self._record_event("session_outcomes", {
@@ -184,9 +164,9 @@ class StatsCollector:
         })
         self.peak_level = max(self.peak_level, final_level)
 
-    # -------- Feature 7: EXP Over Time --------
+    # -- EXP over time --
     def record_exp_snapshot(self, total_exp, current_level, game_time):
-        """Periodic EXP sample (event_type='snapshot')."""
+        """Periodic EXP snapshot."""
         self._record_event("exp_over_time", {
             "event_type": "snapshot",
             "total_exp": total_exp,
@@ -197,7 +177,7 @@ class StatsCollector:
         })
 
     def record_exp_gain(self, exp_gained, source_enemy, total_exp, current_level, game_time):
-        """EXP gain event (event_type='gain')."""
+        """One-off EXP gain event."""
         self._record_event("exp_over_time", {
             "event_type": "gain",
             "total_exp": total_exp,
@@ -207,7 +187,7 @@ class StatsCollector:
             "game_time": round(game_time, 2),
         })
 
-    # -------- Feature 8: Death Cause --------
+    # -- Death cause --
     def record_death(self, killer_type, killer_attack, player_level,
                       player_hp_before, game_time, time_remaining):
         self._record_event("death_cause", {
@@ -219,9 +199,9 @@ class StatsCollector:
             "time_remaining": round(time_remaining, 2),
         })
 
-    # -------- Per-frame update --------
+    # -- Per-frame --
     def update(self, dt, player, game_time):
-        """Sample HP periodically, EXP periodically, and auto-save to CSV."""
+        """Sample HP/EXP on interval and auto-flush CSVs."""
         self._hp_sample_timer += dt
         if self._hp_sample_timer >= self._hp_sample_interval:
             self._hp_sample_timer = 0.0
@@ -232,18 +212,14 @@ class StatsCollector:
             self._exp_sample_timer = 0.0
             self.record_exp_snapshot(player.total_exp, player.level, game_time)
 
-        # Auto-flush to disk every 30s so crashes don't lose data
         self._autosave_timer += dt
         if self._autosave_timer >= self._autosave_interval:
             self._autosave_timer = 0.0
             self.export_csv(verbose=False)
 
-    # -------- CSV Export --------
+    # -- CSV export --
     def export_csv(self, verbose=True):
-        """Append new records (since last export) to CSV files.
-        Uses a cursor per feature so rows are written exactly once.
-        Records stay in memory so summaries/leaderboard keep working.
-        """
+        """Append new records to each CSV (cursor-based, no duplicate rows)."""
         total_exported = 0
         for feature_name, records in self.records.items():
             cursor = self._export_cursor.get(feature_name, 0)
@@ -263,14 +239,13 @@ class StatsCollector:
                         writer.writeheader()
                     writer.writerows(new_records)
                 total_exported += len(new_records)
-                # Advance cursor so we don't re-export these rows
                 self._export_cursor[feature_name] = len(records)
             except (IOError, OSError) as e:
                 if verbose:
                     print(f"[StatsCollector] Failed to write {feature_name}.csv: {e}")
                 continue
 
-        # Always update leaderboard (it uses instance aggregates, not records list)
+        # Leaderboard is derived from aggregates, so update it every flush.
         self._export_leaderboard()
 
         if verbose:
@@ -279,7 +254,7 @@ class StatsCollector:
                   f"({total_in_memory} total tracked) → {self.DATA_DIR}/")
 
     def _export_leaderboard(self):
-        """Append or update this session's row in leaderboard.csv."""
+        """Write/overwrite this session's row in leaderboard.csv."""
         leaderboard_path = os.path.join(self.DATA_DIR, "leaderboard.csv")
         fields = [
             "session_id", "player_name", "session_start",
@@ -304,7 +279,7 @@ class StatsCollector:
                            + self.kills_by_type.get("final_boss", 0)),
         }
 
-        # Read existing leaderboard, remove any old row for this session_id
+        # Drop any stale row for this session, then append current one.
         existing_rows = []
         if os.path.exists(leaderboard_path):
             try:
@@ -318,7 +293,6 @@ class StatsCollector:
 
         existing_rows.append(row)
 
-        # Rewrite full leaderboard (so we can update the current session's row)
         try:
             with open(leaderboard_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -327,9 +301,9 @@ class StatsCollector:
         except (IOError, OSError) as e:
             print(f"[StatsCollector] Failed to write leaderboard: {e}")
 
-    # -------- Summary helpers --------
+    # -- Summary helpers --
     def generate_summary(self):
-        """Text summary of the session."""
+        """Return a text summary of the current session."""
         pending = sum(len(r) for r in self.records.values())
         lines = [
             f"=== Session {self.session_id} ({self.player_name}) ===",
@@ -347,7 +321,7 @@ class StatsCollector:
 
     @classmethod
     def read_leaderboard(cls, top_n=10):
-        """Static helper: read leaderboard and return top N sorted by peak_level then kills."""
+        """Load leaderboard.csv and return the top N rows."""
         path = os.path.join(cls.DATA_DIR, "leaderboard.csv")
         if not os.path.exists(path):
             return []

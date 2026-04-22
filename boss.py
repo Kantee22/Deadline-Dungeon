@@ -1,8 +1,4 @@
-"""
-boss.py - Boss class for Deadline Dungeon
-Extends Enemy with multi-phase combat, special attacks, and enrage.
-Bosses have: idle, walk, attack, hurt, death, AND special (extra animation)
-"""
+"""boss.py - Boss enemy with phases, special attacks, and enrage."""
 import pygame
 import math
 import random
@@ -12,40 +8,100 @@ from animation import SpriteAnimator
 
 
 class Boss(Enemy):
-    """Boss enemy with phases, special attacks, and enrage mechanics."""
+    """Multi-phase boss (extends Enemy with special attacks)."""
 
+    # Boss variants grouped by tier (1 = Lv.10, 2 = Lv.20, 3 = final/timeout).
+    # Multiple variants per tier make each run feel different. `tint` is an
+    # optional RGB multiplier applied to shared sprite folders.
     BOSS_TEMPLATES = {
+        # -- Tier 1 (mini boss #1) --
         "mini_boss_1": {
-            "name": "Greatsword Skeleton",
-            "hp": 350, "attack": 18, "speed": 70, "exp": 100,
-            "size": 34, "color": (220, 210, 180), "atk_cd": 1.0,
+            "tier": 1, "name": "Greatsword Skeleton",
+            "hp": 440, "attack": 22, "speed": 75, "exp": 120,
+            "size": 34, "color": (220, 210, 180), "atk_cd": 0.95,
             "phases": 2, "sprite_folder": "Greatsword Skeleton",
             "pixel_scale": 4.0,
         },
+        "mini_boss_1_cursed": {
+            "tier": 1, "name": "Cursed Revenant",
+            "hp": 380, "attack": 26, "speed": 95, "exp": 140,
+            "size": 34, "color": (160, 140, 220), "atk_cd": 0.8,
+            "phases": 2, "sprite_folder": "Greatsword Skeleton",
+            "pixel_scale": 4.0,
+            "tint": (150, 120, 220),
+        },
+        "mini_boss_1_colossus": {
+            "tier": 1, "name": "Bone Colossus",
+            "hp": 640, "attack": 20, "speed": 60, "exp": 160,
+            "size": 38, "color": (250, 245, 220), "atk_cd": 1.1,
+            "phases": 2, "sprite_folder": "Greatsword Skeleton",
+            "pixel_scale": 4.5,
+            "tint": (255, 240, 200),
+        },
+
+        # -- Tier 2 (mini boss #2) --
         "mini_boss_2": {
-            "name": "Werewolf",
+            "tier": 2, "name": "Werewolf",
             "hp": 700, "attack": 28, "speed": 95, "exp": 200,
             "size": 38, "color": (120, 80, 50), "atk_cd": 0.7,
             "phases": 2, "sprite_folder": "werewolf",
             "pixel_scale": 4.5,
         },
+        "mini_boss_2_alpha": {
+            "tier": 2, "name": "Alpha Werewolf",
+            "hp": 950, "attack": 30, "speed": 110, "exp": 240,
+            "size": 40, "color": (90, 55, 35), "atk_cd": 0.65,
+            "phases": 3, "sprite_folder": "werewolf",
+            "pixel_scale": 4.7,
+            "tint": (210, 170, 120),
+        },
+        "mini_boss_2_shadow": {
+            "tier": 2, "name": "Shadow Stalker",
+            "hp": 580, "attack": 34, "speed": 120, "exp": 230,
+            "size": 36, "color": (60, 60, 80), "atk_cd": 0.6,
+            "phases": 2, "sprite_folder": "werewolf",
+            "pixel_scale": 4.4,
+            "tint": (110, 110, 160),
+        },
+
+        # -- Tier 3 (final boss) --
         "final_boss": {
-            "name": "Elite Orc",
+            "tier": 3, "name": "Elite Orc",
             "hp": 1200, "attack": 35, "speed": 80, "exp": 500,
             "size": 38, "color": (60, 120, 40), "atk_cd": 0.7,
             "phases": 3, "sprite_folder": "EliteOrc",
             "pixel_scale": 4.0,
         },
+        "final_boss_warchief": {
+            "tier": 3, "name": "Warchief Zarkoth",
+            "hp": 1600, "attack": 33, "speed": 70, "exp": 600,
+            "size": 42, "color": (90, 90, 40), "atk_cd": 0.75,
+            "phases": 3, "sprite_folder": "EliteOrc",
+            "pixel_scale": 4.4,
+            "tint": (200, 170, 90),
+        },
+        "final_boss_berserker": {
+            "tier": 3, "name": "Berserker Grom",
+            "hp": 1000, "attack": 42, "speed": 105, "exp": 580,
+            "size": 38, "color": (180, 60, 40), "atk_cd": 0.55,
+            "phases": 3, "sprite_folder": "EliteOrc",
+            "pixel_scale": 4.0,
+            "tint": (255, 120, 120),
+        },
     }
 
+    @classmethod
+    def get_tier_pool(cls, tier):
+        """Return keys of all boss templates in a given tier."""
+        return [k for k, v in cls.BOSS_TEMPLATES.items() if v.get("tier") == tier]
+
     def __init__(self, x, y, boss_type="mini_boss_1", enraged=False):
-        # Init base Enemy with slime defaults first
+        # Build from base Enemy first, then override with boss stats.
         super().__init__(x, y, "slime", 1)
 
         self.boss_type = boss_type
         t = self.BOSS_TEMPLATES.get(boss_type, self.BOSS_TEMPLATES["mini_boss_1"])
 
-        # Override stats
         self.boss_name = t["name"]
         self.max_hp = t["hp"]
         self.hp = self.max_hp
@@ -57,10 +113,14 @@ class Boss(Enemy):
         self.attack_cooldown = t["atk_cd"]
         self.max_phases = t["phases"]
 
+        # Tier decides AI + special skill (all variants in tier share them).
+        self.tier = t.get("tier", 1)
+        self.tint = t.get("tint")
+
         self.enemy_type = boss_type
         self.detect_range = 500
 
-        # Enrage (when timer runs out)
+        # Enrage buff (applied when deadline expires).
         self.enraged = enraged
         if enraged:
             self.max_hp = int(self.max_hp * 1.5)
@@ -68,22 +128,24 @@ class Boss(Enemy):
             self.attack = int(self.attack * 1.3)
             self.speed = int(self.speed * 1.2)
 
-        # Phase system
+        # Phase state.
         self.phase = 1
         self.phase_thresholds = self._calculate_thresholds()
 
-        # Special attack
+        # Flipped by GameWorld when spawned via the timeout jump-in.
+        self.spawned_jump_in = False
+
+        # Special attack state.
         self.special_timer = 0.0
         self.special_cooldown = 4.0
         self._special_effects = []
         self._using_special = False
-        self._pending_special = None      # animation-synced special payload
+        self._pending_special = None
 
-        # Visual
         self._pulse_timer = 0.0
         self.attack_range = 40
 
-        # Load boss sprites (override enemy sprites)
+        # Load boss sprites (replaces the base enemy sprites).
         sprite_folder = t.get("sprite_folder", boss_type)
         sprite_path = os.path.join("images", "enemies", sprite_folder)
         px_scale = t.get("pixel_scale", 4.0)
@@ -92,19 +154,17 @@ class Boss(Enemy):
         self.has_special_anim = self.animator.has_action("special")
 
     def _calculate_thresholds(self):
+        """HP values at which boss transitions to the next phase."""
         thresholds = []
         for i in range(1, self.max_phases):
             thresholds.append(self.max_hp * (1 - i / self.max_phases))
         return thresholds
 
     def attack_player(self, player):
-        """Elite Orc has a radial spin attack - hits all around at once.
-        Other bosses use the normal enemy attack (inherits pending_attack pattern).
-        """
-        if self.boss_type != "final_boss":
+        """Tier-3 uses a 360° spin attack; other tiers use Enemy's attack."""
+        if self.tier != 3:
             return super().attack_player(player)
 
-        # Final boss radial attack: bigger range, no facing requirement
         if (not self.alive or self._attack_timer > 0 or self._pending_attack
                 or self._is_dying or self._using_special):
             return 0
@@ -118,15 +178,16 @@ class Boss(Enemy):
                 self.animator.set_direction(self.direction)
             self._update_animation("attack")
 
-            # Queue damage to fire mid/late animation instead of instant
+            # Hit radius slightly larger than spin_radius for forgiveness.
             self._pending_attack = {
                 "release_in": self._compute_attack_release(),
                 "damage": self.attack,
-                "range": spin_radius + 25,  # a bit forgiving for player movement
+                "range": spin_radius + 25,
             }
         return 0
 
     def phase_transition(self):
+        """Advance to next phase when HP crosses a threshold."""
         for i, threshold in enumerate(self.phase_thresholds):
             if self.hp <= threshold and self.phase <= i + 1:
                 self.phase = i + 2
@@ -135,12 +196,13 @@ class Boss(Enemy):
         return False
 
     def _on_phase_change(self):
+        """Buff stats and shorten special cooldown on phase up."""
         self.attack = int(self.attack * 1.15)
         self.speed = int(self.speed * 1.1)
         self.special_cooldown = max(1.5, self.special_cooldown * 0.8)
 
     def _get_animation_duration(self, action):
-        """Get the total duration of an animation for this boss."""
+        """Return total time for an action animation, or 0.6 fallback."""
         if self.has_sprites:
             key = f"{action}_{self.direction}"
             anim = self.animator.animations.get(key)
@@ -149,29 +211,21 @@ class Boss(Enemy):
         return 0.6
 
     def can_use_special(self):
-        """Phase gating for special:
-        - Mini bosses (1, 2): phase 1 = no special, phase 2+ = special enabled
-        - Final boss (Elite Orc): special available from phase 1
-        """
-        if self.boss_type == "final_boss":
+        """Tier 3 can always special; other tiers need phase 2+."""
+        if self.tier == 3:
             return True
         return self.phase >= 2
 
     def special_attack(self, player_x, player_y):
-        """Execute boss-type-specific special.
-        Special is only available in phase 2+ for mini bosses.
-        Elite Orc (final) has special from the start.
-        """
+        """Trigger this boss's tier-specific special attack."""
         if self.special_timer > 0 or self._using_special:
             return None
-        # Phase-gate: mini bosses don't use special in phase 1
-        if self.boss_type in ("mini_boss_1", "mini_boss_2") and not self.can_use_special():
+        if self.tier != 3 and not self.can_use_special():
             return None
 
         self.special_timer = self.special_cooldown
         self._using_special = True
 
-        # Face player
         self.direction = "right" if player_x > self.x else "left"
         self.anim_state = "special"
         if self.has_sprites and self.has_special_anim:
@@ -180,12 +234,12 @@ class Boss(Enemy):
 
         anim_dur = self._get_animation_duration("special")
 
-        # Dispatch by boss type
-        if self.boss_type == "mini_boss_1":
+        # Per-tier skill dispatch.
+        if self.tier == 1:
             return self._skill_ground_slam(player_x, player_y, anim_dur)
-        elif self.boss_type == "mini_boss_2":
+        elif self.tier == 2:
             return self._skill_charge_bite(player_x, player_y, anim_dur)
-        elif self.boss_type == "final_boss":
+        elif self.tier == 3:
             return self._skill_jump_slam(player_x, player_y, anim_dur)
         return None
 
@@ -310,6 +364,27 @@ class Boss(Enemy):
         self.special_timer = max(0, self.special_timer - dt)
         self._pulse_timer += dt
 
+        # On the very first tick after a timeout jump-in, fire a dramatic
+        # landing shockwave so the player gets the "oh shit, it's here" feel.
+        if self.spawned_jump_in:
+            self.spawned_jump_in = False
+            self._special_effects.append({
+                "type": "shockwave",
+                "x": self.x, "y": self.y,
+                "radius": 0,
+                "max_radius": 260,
+                "damage": self.attack * 0.8,
+                "timer": 0.7, "life": 0.7,
+                "hit": False,
+                "color": (255, 80, 50),
+                "thickness": 8,
+                "impact_delay": 0.0,
+                "inner_ring": True,
+            })
+            # Small delay before the boss acts so the player registers it
+            self.special_timer = 0.8
+            self._attack_timer = 0.5
+
         # Special animation playing
         if self._using_special:
             # Handle movement during special (dash / jump)
@@ -432,6 +507,24 @@ class Boss(Enemy):
         if effect in self._special_effects:
             self._special_effects.remove(effect)
 
+    def _draw_tinted_sprite(self, surface, camera_x, camera_y):
+        """Draw the current sprite frame with a multiplicative color tint.
+        Falls back to normal draw if tinting fails for any reason."""
+        frame = self.animator.get_frame()
+        if frame is None:
+            return False
+        try:
+            tinted = frame.copy()
+            tint_surf = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
+            tint_surf.fill((*self.tint, 255))
+            tinted.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+            sx = self.x - camera_x - tinted.get_width() // 2
+            sy = self.y - camera_y - tinted.get_height() // 2
+            surface.blit(tinted, (int(sx), int(sy)))
+            return True
+        except Exception:
+            return False
+
     def draw(self, surface, camera_x, camera_y):
         """Draw boss with sprites or fallback visuals."""
         if not self.alive and not self._is_dying:
@@ -441,7 +534,11 @@ class Boss(Enemy):
         sy = int(self.y - camera_y)
 
         if self.has_sprites:
-            self.animator.draw(surface, self.x, self.y, camera_x, camera_y)
+            drew = False
+            if self.tint is not None:
+                drew = self._draw_tinted_sprite(surface, camera_x, camera_y)
+            if not drew:
+                self.animator.draw(surface, self.x, self.y, camera_x, camera_y)
         else:
             # Fallback: pulsing circle
             pulse = abs(math.sin(self._pulse_timer * 2))

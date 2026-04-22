@@ -77,44 +77,92 @@ class GameWorld:
         enemy = Enemy(x, y, enemy_type, level_scale=player.level)
         self.enemies.append(enemy)
 
-    def _spawn_boss(self, boss_type, player, enraged=False):
-        # Spawn boss in a room far from player
-        bx, by = self.tilemap.get_boss_spawn(player.x, player.y)
+    def _spawn_boss(self, boss_type, player, enraged=False, jump_in=False):
+        """Spawn a boss. Normally spawns in a far-away room; if jump_in is
+        True the boss drops right in front of the player instead — used for
+        the timeout scenario where the final boss is chasing you down."""
+        if jump_in:
+            bx, by = self._find_jump_in_position(player)
+        else:
+            # Spawn boss in a room far from player
+            bx, by = self.tilemap.get_boss_spawn(player.x, player.y)
 
         boss = Boss(bx, by, boss_type, enraged=enraged)
         self.bosses.append(boss)
         self.boss_active = True
 
+        # Flag boss as jumped-in so visuals can react
+        if jump_in:
+            boss.spawned_jump_in = True
+
         for enemy in self.enemies[:]:
             d = math.hypot(enemy.x - bx, enemy.y - by)
             if d < 200:
                 self.enemies.remove(enemy)
+        return boss
+
+    def _find_jump_in_position(self, player):
+        """Find a walkable tile ~140px in front of the player (in roughly
+        their facing direction) for the timeout boss to drop in on."""
+        tm = self.tilemap
+        facing = getattr(player, "facing", 0.0)
+        base_dist = 140
+        candidates = []
+        for ang_off in (0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2, math.pi):
+            ang = facing + ang_off
+            for dist in (base_dist, base_dist - 30, base_dist + 30):
+                cx = player.x + math.cos(ang) * dist
+                cy = player.y + math.sin(ang) * dist
+                if tm.is_walkable(cx, cy):
+                    candidates.append((cx, cy, abs(ang_off)))
+        if candidates:
+            # Prefer the smallest angle offset → most "in front"
+            candidates.sort(key=lambda c: c[2])
+            return candidates[0][0], candidates[0][1]
+        # Last-resort fallback
+        return tm.get_boss_spawn(player.x, player.y)
+
+    def _pick_boss_from_tier(self, tier):
+        """Randomly pick a boss template key from the given tier pool.
+        If the tier has no templates (shouldn't happen), fall back to the
+        canonical key for that tier."""
+        pool = Boss.get_tier_pool(tier)
+        if pool:
+            return random.choice(pool)
+        # Safety fallback
+        return {1: "mini_boss_1", 2: "mini_boss_2", 3: "final_boss"}[tier]
 
     def check_milestones(self, player):
         events = []
 
         if player.level >= 10 and not self.mini_boss_1_spawned:
             self.mini_boss_1_spawned = True
-            self._spawn_boss("mini_boss_1", player)
+            boss_key = self._pick_boss_from_tier(1)
+            self._spawn_boss(boss_key, player)
             events.append("mini_boss_1_spawn")
 
         if (player.level >= 20 and not self.mini_boss_2_spawned
                 and self.mini_boss_1_defeated):
             self.mini_boss_2_spawned = True
-            self._spawn_boss("mini_boss_2", player)
+            boss_key = self._pick_boss_from_tier(2)
+            self._spawn_boss(boss_key, player)
             events.append("mini_boss_2_spawn")
 
         if (player.level >= 30 and not self.final_boss_spawned
                 and self.mini_boss_2_defeated):
             self.final_boss_spawned = True
-            self._spawn_boss("final_boss", player)
+            boss_key = self._pick_boss_from_tier(3)
+            self._spawn_boss(boss_key, player)
             events.append("final_boss_spawn")
 
         if (self.timer >= self.MAX_TIME and not self.final_boss_spawned
                 and not self.timeout_triggered):
             self.timeout_triggered = True
             self.final_boss_spawned = True
-            self._spawn_boss("final_boss", player, enraged=True)
+            boss_key = self._pick_boss_from_tier(3)
+            # Deadline passed — boss drops right in front of the player
+            # instead of way across the dungeon.
+            self._spawn_boss(boss_key, player, enraged=True, jump_in=True)
             events.append("timeout_boss_spawn")
 
         return events
@@ -152,13 +200,15 @@ class GameWorld:
                 self.boss_active = len(self.bosses) > 0
                 events.append(("boss_defeated", boss.boss_type))
 
-                if boss.boss_type == "mini_boss_1":
+                # Use tier (1/2/3) so any variant inside that tier triggers
+                # the matching milestone.
+                if boss.tier == 1:
                     self.mini_boss_1_defeated = True
                     self.state = "class_select"
                     events.append("class_select")
-                elif boss.boss_type == "mini_boss_2":
+                elif boss.tier == 2:
                     self.mini_boss_2_defeated = True
-                elif boss.boss_type == "final_boss":
+                elif boss.tier == 3:
                     self.final_boss_defeated = True
                     self.state = "game_over"
                     events.append("victory")
@@ -170,6 +220,7 @@ class GameWorld:
         return events
 
     def draw_ground(self, surface, camera_x, camera_y, screen_w, screen_h):
+        """Draw the floor/wall tiles (underneath entities)."""
         self.tilemap.draw(surface, camera_x, camera_y, screen_w, screen_h)
 
     def draw_entities(self, surface, camera_x, camera_y):

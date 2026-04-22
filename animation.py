@@ -1,17 +1,9 @@
-"""
-animation.py - Sprite animation system for Deadline Dungeon
-Loads sprite sheets from folder structure:
-  images/{character}/{action}_{direction}/frame.png
-Features:
-- Auto-crops transparent padding (makes characters appear full-size)
-- Supports numeric (0.png, 1.png) or named (arrow.png) filenames
-- Fallback for old folder names (attack_melee -> attack, attack_bow -> skill)
-"""
+"""animation.py - Sprite animation loader (folder-based, auto-cropped)."""
 import pygame
 import os
 
 
-# Map old folder names to new standard names
+# Legacy folder names mapped to the new names.
 OLD_NAME_ALIASES = {
     "attack_melee": "attack",
     "attack_bow":   "skill",
@@ -19,7 +11,7 @@ OLD_NAME_ALIASES = {
 
 
 class Animation:
-    """A single animation sequence (e.g. 'idle_left')."""
+    """One animation sequence (frames + timing)."""
 
     def __init__(self, frames, frame_duration=0.12, loop=True):
         self.frames = frames
@@ -55,7 +47,7 @@ class Animation:
 
 
 class SpriteAnimator:
-    """Manages all animations for a character."""
+    """Holds all animations for one character (multiple actions + directions)."""
 
     DEFAULT_DURATIONS = {
         "idle":    0.15,
@@ -67,16 +59,11 @@ class SpriteAnimator:
         "special": 0.10,
     }
 
+    # Actions that play once instead of looping.
     NO_LOOP = {"attack", "skill", "hurt", "death", "special"}
 
     def __init__(self, sprite_folder, scale=None, pixel_scale=None, auto_crop=True):
-        """
-        sprite_folder: path to character folder
-        scale: (width, height) target size — forces all frames to this size (stretches)
-        pixel_scale: float multiplier — scales frames by this factor (preserves ratios)
-                     Takes precedence over scale if both provided.
-        auto_crop: if True, removes transparent padding from frames
-        """
+        """pixel_scale (preferred) scales by multiplier; scale forces fixed size."""
         self.animations = {}
         self.current_action = "idle"
         self.current_direction = "right"
@@ -91,7 +78,7 @@ class SpriteAnimator:
             self.loaded = len(self.animations) > 0
 
     def _apply_scale(self, frames):
-        """Apply pixel_scale (preferred) or scale to a list of frames."""
+        """Return frames resized by pixel_scale (or fixed scale)."""
         if not frames:
             return frames
         if self.pixel_scale:
@@ -106,10 +93,10 @@ class SpriteAnimator:
         return frames
 
     def _load_from_folder(self, folder):
-        """Load all animation subfolders. Also handles flat folders (no _left/_right subdirs)."""
+        """Load animations from either action_direction subfolders or a flat folder."""
         entries = os.listdir(folder)
 
-        # Check if this is a flat folder (contains image files directly)
+        # Flat folder = images directly inside (single shared anim).
         has_direct_images = any(
             f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))
             for f in entries
@@ -117,10 +104,8 @@ class SpriteAnimator:
         )
 
         if has_direct_images:
-            # Flat folder — single animation, works for both directions
             frames = self._load_raw_frames(folder)
             if frames:
-                # Auto-crop: compute bbox across these frames
                 if self.auto_crop:
                     bbox = None
                     for f in frames:
@@ -147,7 +132,7 @@ class SpriteAnimator:
                 self.animations["idle_right"] = anim
             return
 
-        # Normal case: parse action_direction subfolders
+        # Parse action_direction subfolder names.
         parsed = {}
         for entry in entries:
             full_path = os.path.join(folder, entry)
@@ -163,22 +148,20 @@ class SpriteAnimator:
             else:
                 continue
 
-            # Old-name alias
             action = OLD_NAME_ALIASES.get(action_part, action_part)
             key = f"{action}_{direction}"
             if key in parsed and action_part in OLD_NAME_ALIASES:
                 continue
             parsed[key] = full_path
 
-        # PASS 1: Load all raw frames from all subfolders
-        raw_anims = {}  # key -> list of raw Surfaces
+        # Pass 1: read raw frames from every subfolder.
+        raw_anims = {}
         for key, folder_path in parsed.items():
             frames = self._load_raw_frames(folder_path)
             if frames:
                 raw_anims[key] = frames
 
-        # PASS 2: Compute SHARED bounding box across all animations
-        # This ensures the character stays the same relative size across all actions
+        # Pass 2: compute a shared bounding box so all actions stay the same size.
         shared_bbox = None
         if self.auto_crop:
             for frames in raw_anims.values():
@@ -192,15 +175,13 @@ class SpriteAnimator:
                         shared_bbox = shared_bbox.union(rect)
 
             if shared_bbox is not None:
-                # Add padding, clamp to frame bounds
                 padding = 2
                 shared_bbox.inflate_ip(padding * 2, padding * 2)
-                # Find any frame to get the full size for clamping
                 any_frame = next(iter(raw_anims.values()))[0]
                 full_rect = pygame.Rect(0, 0, *any_frame.get_size())
                 shared_bbox = shared_bbox.clip(full_rect)
 
-        # PASS 3: Crop all frames to shared bbox, then scale, then wrap in Animation
+        # Pass 3: crop, scale, wrap in Animation.
         for key, frames in raw_anims.items():
             action = key.rsplit("_", 1)[0]
             if self.auto_crop and shared_bbox is not None and shared_bbox.width > 0:
@@ -222,7 +203,7 @@ class SpriteAnimator:
             self.animations[key] = Animation(frames, duration, loop)
 
     def _load_raw_frames(self, folder_path):
-        """Load images from a folder sorted numerically, without cropping/scaling."""
+        """Load frame images from a folder sorted numerically."""
         extensions = (".png", ".jpg", ".jpeg", ".bmp")
         files = []
         for f in os.listdir(folder_path):
@@ -241,17 +222,12 @@ class SpriteAnimator:
         for filepath in files:
             try:
                 img = pygame.image.load(filepath)
-                # Force explicit per-pixel alpha. convert_alpha() can produce
-                # broken surfaces on some Mac/Retina setups when combined
-                # with pygame.SCALED (sprites render as opaque black rects).
-                # Creating an explicit 32-bit RGBA surface avoids this issue.
+                # Force explicit RGBA32 (avoids black-sprite bug on Mac/SCALED).
                 if img.get_bitsize() != 32 or not (img.get_flags() & pygame.SRCALPHA):
                     converted = pygame.Surface(img.get_size(), pygame.SRCALPHA, 32)
                     converted.blit(img, (0, 0))
                     img = converted
                 else:
-                    # Already RGBA32 — still run convert_alpha for perf but
-                    # catch any platform-specific issues
                     try:
                         img = img.convert_alpha()
                     except pygame.error:
@@ -262,7 +238,7 @@ class SpriteAnimator:
         return raw_frames
 
     def set_action(self, action, force=False):
-        """Change animation. Doesn't interrupt non-looping actions unless force=True."""
+        """Switch to a new action (won't interrupt non-looping actions unless force=True)."""
         if action == self.current_action and not force:
             key = f"{self.current_action}_{self.current_direction}"
             anim = self.animations.get(key)
@@ -293,18 +269,17 @@ class SpriteAnimator:
         return True
 
     def get_frame(self):
+        """Return current frame; flip from the opposite direction if missing."""
         key = f"{self.current_action}_{self.current_direction}"
         anim = self.animations.get(key)
         if anim:
             return anim.get_frame()
-        # Fallback: try other direction
         other = "right" if self.current_direction == "left" else "left"
         key = f"{self.current_action}_{other}"
         anim = self.animations.get(key)
         if anim:
             frame = anim.get_frame()
             if frame:
-                # Flip horizontally to match requested direction
                 return pygame.transform.flip(frame, True, False)
         return None
 
@@ -313,6 +288,7 @@ class SpriteAnimator:
                 f"{action}_right" in self.animations)
 
     def draw(self, surface, x, y, camera_x=0, camera_y=0):
+        """Blit current frame centered at world coord (x, y)."""
         frame = self.get_frame()
         if frame:
             sx = x - camera_x - frame.get_width() // 2

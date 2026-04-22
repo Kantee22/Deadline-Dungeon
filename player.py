@@ -1,8 +1,4 @@
-"""
-player.py - Player class for Deadline Dungeon
-Manages player state: movement, combat (left click = attack, right click = skill),
-leveling, HP recovery, class selection, and sprite animation.
-"""
+"""player.py - Player character: movement, combat, leveling, animation."""
 import pygame
 import math
 import os
@@ -10,15 +6,17 @@ from animation import SpriteAnimator
 
 
 class Player:
-    """The player character with sprite animation and mouse-based combat."""
+    """Player with sprite animation and mouse-aimed combat."""
 
+    # EXP required to level up (index = level).
     EXP_TABLE = [0] + [int(15 + i * 8 + (i ** 1.4)) for i in range(1, 35)]
 
+    # Base stats per class: (hp, attack, defense, speed).
     CLASS_STATS = {
-        "Soldier": (120, 12, 5, 180),
-        "Knight":  (180, 22, 8, 160),
-        "Wizard":  (110, 30, 3, 170),
-        "Archer":  (130, 18, 5, 200),
+        "Soldier": (100, 10, 5, 180),
+        "Knight":  (150, 18, 7, 160),
+        "Wizard":  (85, 26, 3, 170),
+        "Archer":  (100, 16, 5, 200),
     }
 
     CLASS_SPRITES = {
@@ -28,19 +26,20 @@ class Player:
         "Archer":  "archer",
     }
 
+    # Combat params per class (attack = basic, skill = special ability).
     CLASS_COMBAT = {
         "Soldier": {
             "attack_type": "melee",
             "attack_damage": 1.0,
             "attack_range": 55,
-            "attack_release": 0.18,         # damage fires N seconds after click
-            "attack_duration": 0.4,          # total animation lock time
+            "attack_release": 0.18,
+            "attack_duration": 0.4,
             "skill_type": "projectile",
             "skill_damage": 0.8,
             "skill_range": 300,
             "skill_speed": 400,
             "skill_cooldown": 0.8,
-            "skill_release": 0.25,           # draw bow takes longer
+            "skill_release": 0.25,
             "skill_duration": 0.5,
             "projectile_color": (220, 200, 130),
             "projectile_sprite": "fire_arrow",
@@ -55,12 +54,12 @@ class Player:
             "skill_damage": 2.0,
             "skill_range": 80,
             "skill_cooldown": 2.5,
-            "skill_release": 0.35,           # wind-up then swing
+            "skill_release": 0.35,
             "skill_duration": 0.6,
         },
         "Wizard": {
             "attack_type": "projectile",
-            "attack_damage": 1.2,
+            "attack_damage": 1.0,
             "attack_range": 350,
             "attack_speed": 350,
             "attack_release": 0.22,
@@ -68,16 +67,16 @@ class Player:
             "projectile_color": (255, 100, 30),
             "projectile_sprite": "fire_arrow",
             "skill_type": "aoe",
-            "skill_damage": 2.5,
+            "skill_damage": 2.15,
             "skill_range": 100,
             "skill_cooldown": 3.0,
-            "skill_release": 0.3,             # cast + release
+            "skill_release": 0.3,
             "skill_duration": 0.55,
             "skill_color": (100, 180, 255),
         },
         "Archer": {
             "attack_type": "projectile",
-            "attack_damage": 1.0,
+            "attack_damage": 0.9,
             "attack_range": 400,
             "attack_speed": 500,
             "attack_release": 0.2,
@@ -85,18 +84,17 @@ class Player:
             "projectile_color": (180, 255, 100),
             "projectile_sprite": "fire_arrow",
             "skill_type": "projectile_pierce",
-            "skill_damage": 1.5,
+            "skill_damage": 1.3,
             "skill_range": 500,
             "skill_speed": 600,
             "skill_cooldown": 2.0,
-            "skill_release": 0.3,             # strong pull
+            "skill_release": 0.3,
             "skill_duration": 0.55,
             "projectile_color_skill": (255, 255, 80),
         },
     }
 
-    # Pixel scale: each source pixel becomes N display pixels
-    # Soldier body ~17x21 → ~51x63 display
+    # Sprite pixel-scaling multipliers.
     SPRITE_SCALE = 3.0
     PROJECTILE_SCALE = 2.0
 
@@ -126,10 +124,13 @@ class Player:
         self._skill_cooldown_timer = 0.0
         self._hurt_timer = 0.0
         self._is_dead = False
+        # Set true once death animation finishes (main.py then shows defeat).
+        self.death_complete = False
+        self._death_timer = 0.0
 
         self.projectiles = []
         self.active_effects = []
-        self.pending_attacks = []   # queued attacks with release_timer
+        self.pending_attacks = []   # attacks waiting to release
 
         self.invincible_timer = 0.0
         self.hit_flash_timer = 0.0
@@ -211,29 +212,23 @@ class Player:
                     self.animator.set_direction("right")
 
     def _compute_release_time(self, action, is_projectile=False):
-        """Return when damage/projectile should fire during animation.
-        - Melee: fires 6 frames before end (1 frame later than previous tune)
-        - Projectile (arrow/fireball): fires at the LAST frame (release moment)
-        """
+        """Return the time within an animation when damage should fire.
+        Projectiles release on the final frame; melee hits 6 frames before end."""
         if self.has_sprites:
             key = f"{action}_{self.direction}"
             anim = self.animator.animations.get(key)
             if anim and anim.frames:
                 total = len(anim.frames) * anim.frame_duration
                 min_release = anim.frame_duration * 2.0
-
                 if is_projectile:
-                    # Projectile: fire on final frame (release)
                     desired = total - anim.frame_duration * 0.5
                 else:
-                    # Melee: fire 6 frames before end (1 later than before)
                     desired = total - anim.frame_duration * 6.2
-
                 return max(min_release, desired)
         return 0.15
 
     def left_click(self):
-        """Start attack animation. Damage fires near end of animation."""
+        """Start a basic attack. Damage fires near end of animation."""
         if self._is_dead or self.anim_state in ("hurt", "death"):
             return None
         if self._attack_timer > 0:
@@ -247,7 +242,6 @@ class Player:
         if self.has_sprites:
             self.animator.set_action("attack", force=True)
 
-        # Projectile attacks fire at the LAST frame; melee fires 6 frames before end
         is_proj = atk_type in ("projectile", "projectile_pierce")
         release = self._compute_release_time("attack", is_projectile=is_proj)
         if self.has_sprites:
@@ -271,7 +265,7 @@ class Player:
         return pending
 
     def right_click(self):
-        """Start skill animation. Damage fires near end of animation."""
+        """Start a class skill. Damage fires near end of animation."""
         if self._is_dead or self.anim_state in ("hurt", "death"):
             return None
         if self._skill_cooldown_timer > 0:
@@ -310,14 +304,13 @@ class Player:
         return pending
 
     def _spawn_attack(self, pending):
-        """Actually spawn the effect/projectile after the release delay."""
+        """Spawn the actual projectile or hitbox after the release delay."""
         atk_type = pending["atk_type"]
         dmg = pending["damage"]
         combat = pending["combat"]
         source = "skill" if pending["is_skill"] else "attack"
 
-        # Use CURRENT player position and facing for spawn (not the click time)
-        # This feels more natural — arrow fires from where you are now
+        # Fire from current position/facing (feels more responsive).
         facing = pending["facing"]
         dx = math.cos(facing)
         dy = math.sin(facing)
@@ -395,32 +388,43 @@ class Player:
         return levels_gained
 
     def _on_level_up(self):
+        # Per-class stat growth: (hp, attack, defense).
         growth = {
-            "Soldier": (6, 1.5, 0.5),
-            "Knight":  (10, 2, 1),
-            "Wizard":  (4, 3, 0.3),
-            "Archer":  (6, 2, 0.5),
+            "Soldier": (4, 1.2, 0.4),
+            "Knight":  (7, 1.6, 0.8),
+            "Wizard":  (3, 2.5, 0.3),
+            "Archer":  (4, 1.7, 0.5),
         }
         hp_g, atk_g, def_g = growth.get(self.class_type, (5, 1, 0.5))
         self.max_hp += int(hp_g)
         self.attack += int(atk_g)
         self.defense += int(def_g)
-        self.hp = self.max_hp  # Full HP restore!
+        self.hp = self.max_hp  # Full heal on level-up.
 
     def change_class(self, new_class):
+        """Switch class, re-scaling stats for the player's current level."""
         if new_class not in self.CLASS_STATS:
             return
         self.class_type = new_class
         base = self.CLASS_STATS[new_class]
         level_bonus = self.level - 1
-        self.max_hp = base[0] + level_bonus * 8
+        # Per-level bonus when switching classes.
+        scaling = {
+            "Soldier": (5, 1.5, 0.8),
+            "Knight":  (6, 1.6, 1),
+            "Wizard":  (4, 2, 1),
+            "Archer":  (5, 2, 1),
+        }
+        hp_s, atk_s, def_s = scaling.get(new_class, (8, 2, 1))
+        self.max_hp = int(base[0] + level_bonus * hp_s)
         self.hp = self.max_hp
-        self.attack = base[1] + level_bonus * 2
-        self.defense = base[2] + level_bonus
+        self.attack = int(base[1] + level_bonus * atk_s)
+        self.defense = int(base[2] + level_bonus * def_s)
         self.speed = base[3]
         self._load_sprites()
 
     def take_damage(self, raw_damage):
+        """Apply incoming damage, reduced by defense."""
         if self.invincible_timer > 0:
             return 0
         actual = max(1, raw_damage - self.defense)
@@ -429,10 +433,15 @@ class Player:
         self.hit_flash_timer = 0.2
 
         if self.hp <= 0:
-            self._is_dead = True
-            self.anim_state = "death"
-            if self.has_sprites:
-                self.animator.set_action("death", force=True)
+            if not self._is_dead:
+                self._is_dead = True
+                self.anim_state = "death"
+                # Fallback timer if no death sprite is loaded.
+                self._death_timer = 1.4
+                if self.has_sprites:
+                    self.animator.set_action("death", force=True)
+                # Lock invincibility so death animation isn't interrupted.
+                self.invincible_timer = 9999.0
         else:
             self._hurt_timer = 0.2
             self.anim_state = "hurt"
@@ -468,30 +477,26 @@ class Player:
             elif self._attack_timer <= 0:
                 self.anim_state = "idle"
 
-        # Release pending attacks when their timer expires
+        # Release any attacks whose windup has finished.
         for pending in self.pending_attacks[:]:
             pending["release_in"] -= dt
             if pending["release_in"] <= 0:
                 self._spawn_attack(pending)
                 self.pending_attacks.remove(pending)
 
-        # Update projectiles + wall collision
+        # Move projectiles; kill them on wall hit or max range.
         for proj in self.projectiles[:]:
             proj["x"] += proj["dx"] * dt
             proj["y"] += proj["dy"] * dt
-
-            # Remove if hit wall
             if tilemap and tilemap.is_wall(proj["x"], proj["y"]):
                 self.projectiles.remove(proj)
                 continue
-
-            # Remove if exceeded max range
             dist = math.hypot(proj["x"] - proj["start_x"],
                               proj["y"] - proj["start_y"])
             if dist > proj["max_range"]:
                 self.projectiles.remove(proj)
 
-        # Update AoE effects
+        # Tick AoE effect timers.
         for effect in self.active_effects[:]:
             effect["timer"] -= dt
             if effect["timer"] <= 0:
@@ -503,7 +508,19 @@ class Player:
         if self.projectile_animator:
             self.projectile_animator.update(dt)
 
+        # Flag death_complete when death animation ends (or fallback timer).
+        if self._is_dead and not self.death_complete:
+            if self._death_timer > 0:
+                self._death_timer -= dt
+            if self.has_sprites:
+                if (self.animator.current_action == "death"
+                        and self.animator.is_action_finished()):
+                    self.death_complete = True
+            if self._death_timer <= 0:
+                self.death_complete = True
+
     def set_walk_or_idle(self, is_moving):
+        """Switch between walk and idle animation (ignored while busy)."""
         if self.anim_state in ("attack", "skill", "hurt", "death"):
             return
         if is_moving and self.anim_state != "walk":
@@ -520,8 +537,12 @@ class Player:
         sy = self.y - camera_y
 
         if self.has_sprites:
-            if self.invincible_timer > 0 and int(self.invincible_timer * 10) % 2 == 0:
-                pass  # skip frame for blink
+            # Flicker during hit-invincibility, but not during death.
+            blink = (self.invincible_timer > 0
+                     and not self._is_dead
+                     and int(self.invincible_timer * 10) % 2 == 0)
+            if blink:
+                pass
             else:
                 self.animator.draw(surface, self.x, self.y, camera_x, camera_y)
         else:
@@ -542,8 +563,7 @@ class Player:
             pygame.draw.circle(surface, (255, 255, 220), (int(fx), int(fy)), 4)
 
     def draw_attacks(self, surface, camera_x, camera_y):
-        """Draw projectiles (using sprite if available) and AoE effects."""
-        # Projectiles
+        """Draw projectiles and AoE visuals (melee hits use the swing anim)."""
         for proj in self.projectiles:
             px = proj["x"] - camera_x
             py = proj["y"] - camera_y
@@ -552,8 +572,7 @@ class Player:
             if self.projectile_animator and self.projectile_animator.loaded:
                 frame = self.projectile_animator.get_frame()
                 if frame:
-                    # Rotate sprite to match projectile direction
-                    # Pygame rotates counter-clockwise; negate angle for screen coords
+                    # Rotate sprite to match projectile's flight angle.
                     angle_deg = -math.degrees(proj.get("angle", 0))
                     rotated = pygame.transform.rotate(frame, angle_deg)
                     rect = rotated.get_rect(center=(int(px), int(py)))
@@ -561,14 +580,14 @@ class Player:
                     drew_sprite = True
 
             if not drew_sprite:
-                # Fallback: colored circle with glow
+                # Fallback: colored circle with soft glow.
                 pygame.draw.circle(surface, proj["color"],
                                    (int(px), int(py)), proj["radius"])
                 glow_surf = pygame.Surface((24, 24), pygame.SRCALPHA)
                 pygame.draw.circle(glow_surf, (*proj["color"], 70), (12, 12), 12)
                 surface.blit(glow_surf, (int(px) - 12, int(py) - 12))
 
-        # AoE effects (ice explosion, shockwaves)
+        # AoE circles (wizard blast, etc.).
         for effect in self.active_effects:
             if effect["type"] != "aoe":
                 continue
@@ -581,6 +600,3 @@ class Player:
                                (*effect["color"], alpha),
                                (radius, radius), radius)
             surface.blit(aoe_surf, (int(ex) - radius, int(ey) - radius))
-        # Note: Melee hitboxes are invisible — the sword swing animation
-        # is the visual feedback. The hit is still applied via active_effects
-        # in main.py's _check_player_attacks().

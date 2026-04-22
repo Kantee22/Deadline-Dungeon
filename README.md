@@ -94,7 +94,7 @@ python visualize.py --save --nogui   # Save PNGs without opening a window
 python visualize.py --summary        # Print text summary only (no window)
 ```
 
-Output images are saved to `visualizations/`.
+Output images are saved to `screenshots/visualization/`. A full write-up of every chart lives in [screenshots/visualization/VISUALIZATION.md](screenshots/visualization/VISUALIZATION.md).
 
 ## Project Structure
 
@@ -124,10 +124,9 @@ deadline-dungeon/
 │   └── enemies/
 ├── screenshots/
 │   ├── gameplay/           # In-game screenshots
-│   └── visualization/
+│   └── visualization/      # Dashboard PNGs + VISUALIZATION.md
 │       └── VISUALIZATION.md
-├── stats_data/             # Generated CSV data (auto-created)
-└── visualizations/         # Generated dashboard PNGs (auto-created)
+└── stats_data/             # Generated CSV data (auto-created)
 ```
 
 ## Troubleshooting

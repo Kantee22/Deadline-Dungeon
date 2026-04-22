@@ -41,6 +41,11 @@ class Game:
         self._cursor_blink_timer = 0.0
         self._cursor_visible = True
 
+        # Pause menu state
+        self._pause_selected = 0
+        # State to return to when resuming (could be "playing" or "dying")
+        self._pre_pause_state = None
+
         self._init_game()
 
     def _init_game(self):
@@ -73,9 +78,18 @@ class Game:
                 self.ui.draw_start_screen(self.screen, self.player_name,
                                           input_active=True,
                                           cursor_visible=self._cursor_visible)
-            elif self.game_state == "playing":
+            elif self.game_state in ("playing", "dying"):
+                # "dying" keeps the world rendering so the death animation
+                # plays out before the defeat screen appears.
                 self._update(dt)
                 self._draw()
+            elif self.game_state == "paused":
+                # Freeze the world, redraw the last frame under the overlay.
+                self._draw()
+                hover = self._pause_hover_action()
+                self.ui.draw_pause_menu(self.screen,
+                                        selected_index=self._pause_selected,
+                                        hover_action=hover)
             elif self.game_state == "game_over":
                 self._draw()
                 self.ui.draw_game_over(self.screen, self.won,
@@ -87,6 +101,46 @@ class Game:
         print(self.stats.generate_summary())
         pygame.quit()
         sys.exit()
+
+    def _pause_hover_action(self):
+        """Return the pause-menu action whose rect is under the mouse, or
+        None if the cursor isn't over any button."""
+        if self.game_state != "paused":
+            return None
+        mx, my = pygame.mouse.get_pos()
+        for rect, action in self.ui.get_pause_button_rects():
+            if rect.collidepoint(mx, my):
+                return action
+        return None
+
+    def _pause_do_action(self, action):
+        """Execute a pause-menu action."""
+        if action == "resume":
+            self.game_state = self._pre_pause_state or "playing"
+            self._pre_pause_state = None
+        elif action == "restart":
+            self._init_game()
+            self.stats.player_name = self.player_name.strip() or "Player"
+            self.ui.reset_game_over_state()
+            self._pre_pause_state = None
+            self.game_state = "playing"
+        elif action == "quit":
+            try:
+                self.stats.export_csv()
+            except Exception:
+                pass
+            pygame.quit()
+            sys.exit()
+
+    def _toggle_pause(self):
+        """Enter pause from gameplay, or leave pause if currently paused."""
+        if self.game_state in ("playing", "dying"):
+            self._pre_pause_state = self.game_state
+            self._pause_selected = 0
+            self.game_state = "paused"
+        elif self.game_state == "paused":
+            self.game_state = self._pre_pause_state or "playing"
+            self._pre_pause_state = None
 
     def _handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -111,21 +165,43 @@ class Game:
                 if event.key == pygame.K_r:
                     self._init_game()
                     self.stats.player_name = self.player_name.strip() or "Player"
+                    # Reset UI state so next game-over re-seeds particles /
+                    # replays entrance animation.
+                    self.ui.reset_game_over_state()
                     self.game_state = "playing"
                 elif event.key == pygame.K_q:
                     self.stats.export_csv()
                     pygame.quit()
                     sys.exit()
 
-            elif self.game_state == "playing":
-                if self.world.state == "class_select":
+            elif self.game_state == "paused":
+                # Pause menu keyboard navigation
+                entries = self.ui.PAUSE_ENTRIES
+                if event.key == pygame.K_ESCAPE:
+                    self._toggle_pause()
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    self._pause_selected = (self._pause_selected - 1) % len(entries)
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    self._pause_selected = (self._pause_selected + 1) % len(entries)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                                   pygame.K_SPACE):
+                    action = entries[self._pause_selected][1]
+                    self._pause_do_action(action)
+
+            elif self.game_state in ("playing", "dying"):
+                # ESC toggles pause from any gameplay sub-state
+                if event.key == pygame.K_ESCAPE:
+                    self._toggle_pause()
+                    return
+                # Class selection (only meaningful in playing)
+                if self.game_state == "playing" and self.world.state == "class_select":
                     if event.key == pygame.K_1:
                         self._select_class("Knight")
                     elif event.key == pygame.K_2:
                         self._select_class("Wizard")
                     elif event.key == pygame.K_3:
                         self._select_class("Archer")
-                else:
+                elif self.game_state == "playing":
                     # Keyboard alternatives for attack/skill (Mac users etc.)
                     # Q = attack (like left click), E = skill (like right click)
                     if event.key == pygame.K_q:
@@ -161,6 +237,15 @@ class Game:
                             False, result.get("damage", 0),
                             self.world.timer)
 
+        # Mouse click on pause menu buttons
+        if event.type == pygame.MOUSEBUTTONDOWN and self.game_state == "paused":
+            if event.button == 1:
+                mx, my = event.pos
+                for rect, action in self.ui.get_pause_button_rects():
+                    if rect.collidepoint(mx, my):
+                        self._pause_do_action(action)
+                        break
+
     def _select_class(self, class_name):
         self.player.change_class(class_name)
         self.world.state = "playing"
@@ -171,6 +256,24 @@ class Game:
             True, 0, self.world.timer)
 
     def _update(self, dt):
+        # "dying" — player is dead and we're waiting for the death animation
+        # to finish. Tick animations / camera only; no input / no new damage.
+        if self.game_state == "dying":
+            self.player.update(dt, self.world.tilemap)
+            self.world.update(dt, self.player)
+
+            target_cx = self.player.x - SCREEN_W // 2
+            target_cy = self.player.y - SCREEN_H // 2
+            lerp = 5.0 * dt
+            self.camera_x += (target_cx - self.camera_x) * lerp
+            self.camera_y += (target_cy - self.camera_y) * lerp
+            self.camera_x = max(0, min(self.world.world_w - SCREEN_W, self.camera_x))
+            self.camera_y = max(0, min(self.world.world_h - SCREEN_H, self.camera_y))
+
+            if getattr(self.player, "death_complete", False):
+                self.game_state = "game_over"
+            return
+
         if self.world.state == "class_select":
             return
         if self.world.state == "game_over":
@@ -229,13 +332,24 @@ class Game:
         # Update world
         events = self.world.update(dt, self.player)
 
+        # Find the last defeated boss name from this tick's events (if any)
+        # so the victory log records which variant the player actually beat.
+        last_boss_name = None
+        from boss import Boss as _Boss
+        for event in events:
+            if isinstance(event, tuple) and len(event) == 2 and event[0] == "boss_defeated":
+                tpl = _Boss.BOSS_TEMPLATES.get(event[1])
+                if tpl:
+                    last_boss_name = tpl.get("name", event[1])
+
         for event in events:
             if event == "victory":
                 self.won = True
                 self.game_state = "game_over"
                 self.stats.record_session_outcome(
                     True, self.player.level, self.world.timer,
-                    self.player.class_type, "Elite Orc",
+                    self.player.class_type,
+                    last_boss_name or "Final Boss",
                     self.world.timeout_triggered)
                 # Export immediately so data is saved even if user force-closes
                 self.stats.export_csv(verbose=False)
@@ -288,11 +402,15 @@ class Game:
                         self.player.take_damage(int(effect["damage"]))
                         boss.remove_special_effect(effect)
 
-        # Player death
-        if not self.player.is_alive():
-            self.game_state = "game_over"
+        # Player death — transition to the "dying" animation state rather
+        # than immediately showing the defeat screen. The "dying" branch at
+        # the top of _update() will flip the state to "game_over" once the
+        # death animation finishes (see Player.death_complete).
+        if not self.player.is_alive() and self.game_state != "dying":
+            self.game_state = "dying"
             self.won = False
-            # Record death cause
+            # Record death cause now so stats are preserved even if the
+            # user closes the window during the death animation.
             last_killer = "unknown"
             for enemy in self.world.enemies + self.world.bosses:
                 dist = math.hypot(enemy.x - self.player.x,
@@ -423,6 +541,11 @@ class Game:
         # HUD
         self.ui.draw_hud(self.screen, self.player,
                           self.world.timer, GameWorld.MAX_TIME)
+
+        # Minimap (top-right)
+        self.ui.draw_minimap(self.screen, self.player,
+                             self.world.enemies, self.world.bosses,
+                             self.world.tilemap)
 
         # Boss HP bar
         for boss in self.world.bosses:

@@ -100,3 +100,14 @@ session_id,player_name,timestamp,won,final_level,time_survived,player_class,boss
 1774044335,aim,1774044548,False,19,213,Archer,none,False
 1774044835,mew,1774045104,False,27,269,Wizard,none,False
 1776601945,fu,1776602250.9,True,30,291.58,Knight,Elite Orc,False
+1776632826,rad,1776633236.65,False,26,397.73,Archer,none,False
+1776633279,rad,1776633763.78,True,30,481.16,Knight,Berserker Grom,False
+1776636567,nine,1776636882.12,False,30,284.1,Wizard,none,False
+1776642658,sd,1776642821.18,False,12,153.27,Archer,none,False
+1776854539,d,1776854877.85,True,30,288.29,Knight,Berserker Grom,False
+1776854884,d,1776854981.76,False,10,97.27,Soldier,none,False
+1776855689,l,1776855782.58,False,3,38.23,Soldier,none,False
+1776872020,ra,1776872186.63,False,11,147.23,Soldier,none,False
+1776872202,ra,1776872670.61,False,25,433.07,Archer,none,False
+1776872732,ra,1776873033.56,True,30,299.59,Wizard,Berserker Grom,False
+1776875393,toy,1776875716.12,False,18,192.53,Wizard,none,False

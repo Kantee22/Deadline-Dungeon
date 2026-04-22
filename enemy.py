@@ -1,8 +1,4 @@
-"""
-enemy.py - Enemy class for Deadline Dungeon
-Base class for all enemy types with AI behavior, combat stats, and sprite animation.
-Normal enemies have: idle, walk, attack, hurt, death (NO special)
-"""
+"""enemy.py - Base enemy with chase AI, attack logic, and sprite animation."""
 import pygame
 import math
 import random
@@ -11,7 +7,7 @@ from animation import SpriteAnimator
 
 
 class Enemy:
-    """Base enemy with chase AI, attack behavior, and sprite animation."""
+    """Common enemy behavior (slime, skeleton, orc)."""
 
     SPRITE_FOLDERS = {
         "slime":    "slime",
@@ -25,6 +21,7 @@ class Enemy:
         self.enemy_type = enemy_type
         self.level_scale = level_scale
 
+        # Per-type stat templates (scaled by player level at spawn).
         templates = {
             "slime":   {"hp": 25,  "attack": 6,  "speed": 55,  "exp": 12,
                         "size": 18, "color": (80, 200, 80),  "atk_cd": 1.2,
@@ -55,21 +52,22 @@ class Enemy:
         self.hit_flash = 0.0
         self.alive = True
 
-        # Direction and animation state
+        # Animation state.
         self.direction = "right"
         self.anim_state = "idle"
         self._hurt_timer = 0.0
         self._death_timer = 0.0
         self._is_dying = False
 
-        # Pending attack queue (damage fires near end of attack animation)
+        # Queued hit that fires near end of attack animation.
         self._pending_attack = None
+        # Follow-up hits for multi-strike enemies (e.g. slime = 3 hits).
+        self._extra_hits = []
 
-        # Detection / aggro range (larger = starts chasing earlier)
+        # AI ranges.
         self.detect_range = 380
         self.attack_range = 30
 
-        # Load sprites
         sprite_folder = self.SPRITE_FOLDERS.get(enemy_type, enemy_type)
         sprite_path = os.path.join("images", "enemies", sprite_folder)
         self.animator = SpriteAnimator(sprite_path, pixel_scale=t.get("pixel_scale", 3.0))
@@ -81,16 +79,15 @@ class Enemy:
                            self.size * 2, self.size * 2)
 
     def _update_animation(self, new_state):
-        """Change animation state and update animator."""
+        """Switch to a new animation state."""
         if new_state != self.anim_state or self.anim_state in ("attack", "hurt"):
             self.anim_state = new_state
             if self.has_sprites:
                 self.animator.set_action(new_state, force=True)
 
     def update(self, dt, player_x, player_y, world_w, world_h, tilemap=None):
-        """Update AI: chase player if close, wander otherwise.
-        If tilemap provided, avoid walking through walls (slide along them)."""
-        # Death animation
+        """Per-frame AI: chase if player near, wander otherwise."""
+        # Death animation plays out, then enemy is removed.
         if self._is_dying:
             self._death_timer -= dt
             if self.has_sprites:
@@ -105,7 +102,7 @@ class Enemy:
         self._attack_timer = max(0, self._attack_timer - dt)
         self.hit_flash = max(0, self.hit_flash - dt)
 
-        # Hurt stun
+        # Hurt stun freezes movement.
         if self._hurt_timer > 0:
             self._hurt_timer -= dt
             if self.has_sprites:
@@ -114,7 +111,7 @@ class Enemy:
                 self._update_animation("idle")
             return
 
-        # If attack animation is still playing, wait
+        # Wait for attack animation to finish before moving again.
         if self.anim_state == "attack":
             if self.has_sprites:
                 self.animator.update(dt)
@@ -129,7 +126,7 @@ class Enemy:
         prev_y = self.y
         dist = math.hypot(player_x - self.x, player_y - self.y)
 
-        # Compute desired movement
+        # Chase player if within aggro range, else random wander.
         move_dx = 0.0
         move_dy = 0.0
         if dist < self.detect_range:
@@ -144,11 +141,10 @@ class Enemy:
             move_dx = math.cos(self._wander_angle) * self.speed * 0.3 * dt
             move_dy = math.sin(self._wander_angle) * self.speed * 0.3 * dt
 
-        # Apply movement with wall collision (footprint at feet)
+        # Narrow foot hitbox for wall collision (feels natural with pixel art).
         def has_wall_at(x, y):
             if not tilemap:
                 return False
-            # Footprint at feet - narrow body, below center
             fw = max(8, self.size - 8)
             foot_top = max(2, self.size // 4)
             foot_bot = max(12, self.size - 2)
@@ -157,6 +153,7 @@ class Enemy:
                     tilemap.is_wall(x - fw, y + foot_bot) or
                     tilemap.is_wall(x + fw, y + foot_bot))
 
+        # Try full move → single-axis slide → perpendicular sidestep.
         if tilemap:
             new_x = self.x + move_dx
             new_y = self.y + move_dy
@@ -169,7 +166,6 @@ class Enemy:
             elif not has_wall_at(self.x, new_y):
                 self.y = new_y
             elif dist < self.detect_range and dist > 0:
-                # Chasing and blocked — sidestep perpendicular to go around
                 perp_dx = -move_dy
                 perp_dy = move_dx
                 if not has_wall_at(self.x + perp_dx, self.y + perp_dy):
@@ -183,11 +179,11 @@ class Enemy:
             self.x += move_dx
             self.y += move_dy
 
-        # Clamp to world
+        # Keep inside world bounds.
         self.x = max(self.size, min(world_w - self.size, self.x))
         self.y = max(self.size, min(world_h - self.size, self.y))
 
-        # Update direction based on actual movement
+        # Face horizontal movement direction.
         move_dx_actual = self.x - prev_x
         if abs(move_dx_actual) > 0.1:
             new_dir = "right" if move_dx_actual > 0 else "left"
@@ -196,7 +192,7 @@ class Enemy:
                 if self.has_sprites:
                     self.animator.set_direction(self.direction)
 
-        # Update animation state
+        # Pick walk vs idle animation.
         is_moving = abs(move_dx_actual) > 0.5 or abs(self.y - prev_y) > 0.5 or dist < self.detect_range
         if is_moving and self.anim_state != "walk":
             self._update_animation("walk")
@@ -207,24 +203,32 @@ class Enemy:
             self.animator.update(dt)
 
     def _release_pending_attack_if_due(self, dt, player):
-        """Fire queued attack damage once enough animation time has passed."""
-        if self._pending_attack is None:
-            return 0
-        self._pending_attack["release_in"] -= dt
-        if self._pending_attack["release_in"] <= 0:
-            pa = self._pending_attack
-            self._pending_attack = None
-            # Check player is still in range at release time
-            dist = math.hypot(player.x - self.x, player.y - self.y)
-            if dist < pa["range"]:
-                return player.take_damage(pa["damage"])
-        return 0
+        """Apply queued hit damage once its windup timer runs out."""
+        total_damage = 0
+
+        # Main swing.
+        if self._pending_attack is not None:
+            self._pending_attack["release_in"] -= dt
+            if self._pending_attack["release_in"] <= 0:
+                pa = self._pending_attack
+                self._pending_attack = None
+                dist = math.hypot(player.x - self.x, player.y - self.y)
+                if dist < pa["range"]:
+                    total_damage += player.take_damage(pa["damage"])
+
+        # Follow-up hits spaced past the player's i-frames.
+        for extra in self._extra_hits[:]:
+            extra["release_in"] -= dt
+            if extra["release_in"] <= 0:
+                self._extra_hits.remove(extra)
+                dist = math.hypot(player.x - self.x, player.y - self.y)
+                if dist < extra["range"]:
+                    total_damage += player.take_damage(extra["damage"])
+
+        return total_damage
 
     def _compute_attack_release(self):
-        """Delay damage to late in the attack animation.
-        Fire ~2 frames before end so damage connects visually with the swing
-        without feeling like it hits air (player had time to step away).
-        """
+        """Fire damage ~2 frames before end of attack animation."""
         if self.has_sprites:
             key = f"attack_{self.direction}"
             anim = self.animator.animations.get(key)
@@ -236,33 +240,42 @@ class Enemy:
         return 0.3
 
     def attack_player(self, player):
-        """Start attack animation and queue damage to fire near the end."""
+        """Start an attack; damage will fire later via _release_pending_attack_if_due."""
         if not self.alive or self._attack_timer > 0 or self._is_dying:
             return 0
 
         dist = math.hypot(player.x - self.x, player.y - self.y)
         if dist < self.attack_range + player.width // 2 + self.size:
             self._attack_timer = self.attack_cooldown
+            self._extra_hits = []
 
-            # Face the player
+            # Face the player.
             self.direction = "right" if player.x > self.x else "left"
             if self.has_sprites:
                 self.animator.set_direction(self.direction)
             self._update_animation("attack")
 
-            # Queue delayed damage
             release = self._compute_attack_release()
+            rng = self.attack_range + player.width // 2 + self.size + 15
             self._pending_attack = {
                 "release_in": release,
                 "damage": self.attack,
-                "range": self.attack_range + player.width // 2 + self.size + 15,
+                "range": rng,
             }
-            # Return 0 here - damage fires later via _release_pending_attack_if_due
+
+            # Slime hits 3 times per swing, spaced past player i-frames.
+            if self.enemy_type == "slime":
+                self._extra_hits = [
+                    {"release_in": release + 0.55,
+                     "damage": self.attack, "range": rng},
+                    {"release_in": release + 1.1,
+                     "damage": self.attack, "range": rng},
+                ]
             return 0
         return 0
 
     def take_damage(self, amount):
-        """Receive damage."""
+        """Take damage. Kills start the death animation."""
         if not self.alive or self._is_dying:
             return 0
 
@@ -280,17 +293,17 @@ class Enemy:
         return actual
 
     def _start_death(self):
-        """Begin death animation."""
         self._is_dying = True
         self._death_timer = 0.6
         self._update_animation("death")
 
     def on_death(self):
+        """Mark dead and return EXP reward for the player."""
         self.alive = False
         return self.exp_reward
 
     def draw(self, surface, camera_x, camera_y):
-        """Draw enemy using sprites or circle fallback."""
+        """Draw the enemy (sprite if available, else a colored circle)."""
         if not self.alive and not self._is_dying:
             return
 
@@ -300,7 +313,7 @@ class Enemy:
         if self.has_sprites:
             self.animator.draw(surface, self.x, self.y, camera_x, camera_y)
         else:
-            # Fallback circle
+            # Circle fallback when sprites aren't loaded.
             color = (255, 255, 255) if self.hit_flash > 0 else self.color
             if self._is_dying:
                 alpha = int(255 * (self._death_timer / 0.6))
@@ -312,7 +325,7 @@ class Enemy:
             pygame.draw.circle(surface, (20, 20, 20), (sx - eye_offset, sy - 3), 3)
             pygame.draw.circle(surface, (20, 20, 20), (sx + eye_offset, sy - 3), 3)
 
-        # HP bar
+        # HP bar above enemy.
         if self.hp < self.max_hp and not self._is_dying:
             bar_w = self.size * 2
             bar_h = 4
