@@ -49,11 +49,41 @@ All gameplay events — damage dealt, damage received, kills, deaths, HP samples
 
 ### Boss mechanics
 
-Each boss has multiple phases triggered by HP thresholds. Phase transitions increase speed and reduce the special attack cooldown:
+Each boss has multiple phases triggered by HP thresholds. Phase transitions increase speed and reduce the special attack cooldown. Each tier has **three randomized variants** drawn from a shared pool, so each run feels different:
 
-- **Greatsword Skeleton** (Mini Boss 1, 2 phases) — Phase 2 unlocks a ground slam creating a gray shockwave.
-- **Werewolf** (Mini Boss 2, 2 phases) — Phase 2 unlocks a charging lunge that damages on impact.
-- **Elite Orc** (Final Boss, 3 phases) — Radial spin attack for normal hits; jump-slam special with an intense orange shockwave on landing.
+- **Tier 1 (Lv. 10)** — Greatsword Skeleton / Cursed Revenant / Bone Colossus. Phase 2 unlocks a ground slam creating a gray shockwave.
+- **Tier 2 (Lv. 20)** — Werewolf / Alpha Werewolf / Shadow Stalker. Phase 2 unlocks a charging lunge with a wide bite AoE on impact.
+- **Tier 3 (Lv. 30)** — Elite Orc / Warchief Zarkoth / Berserker Grom. Radial spin attack for normal hits; jump-slam special with an intense orange shockwave on landing.
+
+### Sloth Glyphs (cursed lingering hazard)
+
+Five **Sloth Glyphs** spawn each run as cursed pentagram sigils on the dungeon floor. The moment the player is inside a glyph's radius (120 px) for **1.20 seconds** — even while moving — the glyph wakes and starts:
+
+- **Draining HP** at 1.5 HP/second
+- **Accelerating the deadline timer 2.8x** (only the timer; enemies and AI run at normal speed)
+
+The glyph stays awake until the player walks out of its radius. Visually it's drawn as an inverted pentagram inside two concentric runed rings, with crimson halo, drifting embers, and a "✠ Cursed by Sloth ✠" warning text on the HUD. This mechanic reinforces the deadline theme: stay too long in one spot and the deadline catches up to you.
+
+### Screen shake on damage
+
+Trauma-based screen shake feedback when the player takes a hit. Damage bumps trauma by `0.12 + 0.025 × damage` (capped at 0.95), and the per-frame offset is `trauma² × 18 px` so heavy hits feel disproportionately bigger than light ones. Trauma decays at 1.6/sec. Only the world camera shakes — the HUD, minimap and boss HP bar stay still so numbers remain readable.
+
+### In-game stats dashboard launcher
+
+The matplotlib dashboard can be opened directly from inside the game without quitting:
+
+- **Start screen:** press **Ctrl+V**
+- **Game-over screen:** press **V**
+
+The launcher flushes the current session's CSVs first, then spawns `visualize.py` as a separate process so the game keeps running.
+
+### Atmospheric polish
+
+- **Pixel-art gothic candles** flicker along the dungeon walls — animated wax body, drips, teardrop flame, soft warm halo
+- **Floor decorations** (procedurally placed): bones with skull fragments, jagged cracks, dried-blood splatters, corner cobwebs
+- **Ambient screen vignette** softly darkens the screen edges so the dungeon feels candle-lit rather than evenly lit
+- **Pause menu** (ESC) with Resume / Restart / Quit
+- **Minimap** in the top-right corner with player and boss markers
 
 ## UML Class Diagram
 
@@ -68,11 +98,18 @@ classDiagram
         +stats: StatsCollector
         +ui: UI
         +game_state: str
+        +_shake_trauma: float
+        +_glyph_drain_accumulator: float
         +run()
         -_update(dt)
         -_draw()
         -_handle_event(event)
         -_check_player_attacks()
+        -_launch_visualizer()
+        -_add_shake_from_damage(damage)
+        -_update_shake(dt)
+        -_draw_curse_vignette()
+        -_draw_ambient_vignette()
     }
 
     class Player {
@@ -130,23 +167,31 @@ classDiagram
         +MAX_TIME: float
         +enemies: list
         +bosses: list
+        +glyphs: list
         +tilemap: TileMap
         +state: str
         +spawn_enemy(player)
         +check_milestones(player)
         +update(dt, player)
+        +update_glyphs(dt, x, y)
+        +total_glyph_drain(dt)
+        +any_glyph_active()
         +draw_ground(surface, camera)
         +draw_entities(surface, camera)
     }
 
     class TileMap {
-        +width, height: int
-        +tile_size: int
-        +tiles: list[list[int]]
-        +generate()
+        +map_w, map_h: int
+        +DISPLAY_TILE: int
+        +grid: list[list[int]]
+        +rooms: list
+        +candles: list
         +is_wall(x, y)
         +is_walkable(x, y)
         +get_start_position()
+        +get_glyph_positions(count)
+        +get_candle_positions(density)
+        +update_decor(dt)
         +draw(surface, camera)
     }
 
@@ -189,7 +234,25 @@ classDiagram
         +draw_start_screen(surface, name)
         +draw_game_over(surface, won, player)
         +draw_class_select(surface)
+        +draw_pause_menu(surface, selected)
+        +draw_minimap(surface, player, enemies, bosses, tilemap)
         +draw_level_up_effect(surface)
+    }
+
+    class SlothGlyph {
+        +x, y: float
+        +RADIUS: int = 120
+        +WAKE_TIME: float = 1.20
+        +DRAIN_HP_PER_SEC: float = 1.5
+        +TIME_MULT_AWAKE: float = 2.8
+        +awake_phase: float
+        +time_inside: float
+        +player_inside: bool
+        +update(dt, player_x, player_y)
+        +hp_drain(dt)
+        +time_multiplier()
+        +is_active
+        +draw(surface, camera)
     }
 
     Game "1" *-- "1" Player
@@ -199,6 +262,7 @@ classDiagram
     GameWorld "1" *-- "1" TileMap
     GameWorld "1" *-- "*" Enemy
     GameWorld "1" *-- "*" Boss
+    GameWorld "1" *-- "*" SlothGlyph
     Boss --|> Enemy
     Player "1" *-- "1" SpriteAnimator
     Enemy "1" *-- "1" SpriteAnimator
@@ -209,21 +273,21 @@ classDiagram
 
 | Class | Responsibility | Key collaborators |
 |---|---|---|
-| `Game` | Main loop, event dispatch, game state (start / playing / game over) | All other classes |
+| `Game` | Main loop, event dispatch, game state, screen shake, glyph drain integration, dashboard launcher | All other classes |
 | `Player` | Player state, movement, combat (attack/skill), leveling, class switching | `SpriteAnimator`, `TileMap` |
 | `Enemy` | Base AI for non-boss enemies: chasing, wandering, attacking, death animation | `SpriteAnimator`, `TileMap` |
-| `Boss` | Extends `Enemy` with phase logic, animation-synced special attacks, and enrage | inherits from `Enemy` |
-| `GameWorld` | Time management, enemy spawning, boss milestones, rendering coordination | `TileMap`, `Enemy`, `Boss` |
-| `TileMap` | Procedural dungeon generation (rooms and corridors), wall collision queries | — |
+| `Boss` | Extends `Enemy` with phase logic, animation-synced special attacks, multi-tier variants, enrage | inherits from `Enemy` |
+| `GameWorld` | Time management, enemy spawning, boss milestones, glyph orchestration, rendering coordination | `TileMap`, `Enemy`, `Boss`, `SlothGlyph` |
+| `TileMap` | Procedural dungeon generation, wall collision, candle + floor-decor placement | — |
+| `SlothGlyph` | Cursed lingering-hazard rune: detects player presence, drains HP, multiplies deadline speed | drawn by `GameWorld` |
 | `SpriteAnimator` | Loads sprite folders, manages per-direction animations, frame timing, auto-cropping | — |
 | `StatsCollector` | Records every gameplay event, writes nine CSV files, maintains leaderboard aggregate | — |
-| `UI` | Renders HUD, start screen with name input, class selection menu, game over screen | — |
-| `Animation` | Small helper wrapper for a single animation sequence (frames + duration + loop flag) | used by `SpriteAnimator` |
+| `UI` | Renders HUD, start screen, class select, game over, pause menu, minimap | — |
 
 ### Inheritance and composition
 
-- **Inheritance:** `Boss` inherits from `Enemy`, extending its AI with phase-gated special attacks and custom rendering for shockwaves and charge trails.
-- **Composition:** `Game` owns one instance each of `Player`, `GameWorld`, `StatsCollector`, and `UI`. `GameWorld` owns the `TileMap` and the list of `Enemy` and `Boss` instances. `Player`, `Enemy`, and `Boss` each own a `SpriteAnimator`.
+- **Inheritance:** `Boss` inherits from `Enemy`, extending its AI with phase-gated special attacks, animation-synced dash / jump-slam movement, and custom rendering for shockwaves and charge trails.
+- **Composition:** `Game` owns one instance each of `Player`, `GameWorld`, `StatsCollector`, and `UI`. `GameWorld` owns the `TileMap`, the list of `Enemy` and `Boss` instances, and the list of `SlothGlyph` instances. `Player`, `Enemy`, and `Boss` each own a `SpriteAnimator`.
 
 ## Statistics Collection
 
@@ -251,14 +315,39 @@ Every row includes `session_id`, `player_name`, and `timestamp` so data can be j
 | Pygame 2.5+ | Rendering, input, game loop |
 | pandas | CSV loading for the visualization module |
 | matplotlib | Dashboard and per-chart PNG rendering |
+| pytest | Unit test framework (`tests/`) |
+| GitHub Actions | Continuous integration on push / PR |
 | Git / GitHub | Version control and submission |
 
 ## Extra Features Beyond Requirements
 
-- **Animation-synced combat** — damage triggers at specific frames (e.g. projectiles fire on the final frame of the bow draw, melee hits 6 frames before the swing ends) for tactile feedback
-- **Pixel-perfect sprite scaling** — a shared-bounding-box auto-crop keeps characters the same apparent size across idle, walk, attack, and skill animations
-- **Axis-separated wall collision** — the player slides along walls instead of bouncing when blocked in one direction
-- **Enemy pathfinding around obstacles** — blocked enemies try perpendicular directions to go around walls
-- **Phase-gated boss specials** — mini bosses do not use their special attack until phase 2, giving the player a tutorial-like first phase
-- **Auto-save** — CSV data is flushed every 15 seconds so a crash never loses more than a few seconds of data
-- **Cursor-based CSV append** — `export_csv()` tracks which rows have been written, allowing in-memory records to persist for the live leaderboard summary without duplicating on disk
+### Gameplay & feel
+- **Sloth Glyphs** — five cursed pentagram sigils per dungeon that drain HP and accelerate the deadline timer (2.8x) while you're inside their radius, embodying the "stop procrastinating" theme
+- **Trauma-based screen shake** — every hit shakes the screen with intensity scaled by damage; `trauma**2` scaling makes heavy hits feel disproportionately bigger than light ones
+- **Boss variant pools** — each boss tier has 3 randomized variants so each run feels different
+- **Phase-gated boss specials** — mini bosses do not use their special attack until phase 2
+- **Animation-synced combat** — damage triggers at specific animation frames for tactile feedback
+- **Timeout drama** — when the deadline expires, the final boss drops in front of the player with a shockwave instead of spawning across the map
+
+### Visuals & polish
+- **Pixel-art gothic candles** — animated wax body, drips, teardrop flame, flickering warm glow
+- **Procedural floor decorations** — bones, skull fragments, cracks, dried-blood splatters, corner cobwebs, baked into the map surface for zero per-frame cost
+- **Ambient screen vignette** — soft edge darkening so the dungeon feels candle-lit
+- **Cursed-glyph vignette** — crimson edge ink + warning text while a glyph is siphoning the player
+- **Pixel-perfect sprite scaling** — shared-bounding-box auto-crop keeps characters the same apparent size across all animations
+- **Axis-separated wall collision** — player slides along walls instead of bouncing
+- **Enemy pathfinding around obstacles** — blocked enemies try perpendicular directions
+
+### UX & quality of life
+- **In-game stats dashboard** — Ctrl+V (start screen) / V (game over) opens the matplotlib dashboard as a separate process
+- **Pause menu** with Resume / Restart / Quit, mouse + keyboard navigable
+- **Minimap** in the top-right corner showing room layout + player + boss markers
+- **Auto-save** — CSV data flushed every 15 seconds, never losing more than a few seconds on a crash
+- **Cursor-based CSV append** — only newly recorded rows are written, no duplication on disk
+- **Controls list on start screen** so the player learns the keys before playing
+
+### Engineering practices
+- **84-test pytest suite** covering tilemap, glyphs, player, enemy, boss, stats collector, animation, and game world (`tests/`)
+- **GitHub Actions CI** runs the full test suite on every push and pull request, across Python 3.10 / 3.11 / 3.12 (`.github/workflows/test.yml`)
+- **CI badge** in README shows the current test status at a glance
+                                                                                                                                             

@@ -24,7 +24,6 @@ def test_boss_get_tier_pool_returns_keys():
     assert len(pool1) >= 1
     assert len(pool2) >= 1
     assert len(pool3) >= 1
-    # All keys actually exist in BOSS_TEMPLATES
     for k in pool1 + pool2 + pool3:
         assert k in Boss.BOSS_TEMPLATES
 
@@ -60,17 +59,17 @@ def test_boss_take_damage_reduces_hp():
     assert b.hp < initial
 
 
-def test_boss_collision_helpers_exist():
-    """The wall-stuck fix added _box_blocked / _dash_step / _unstick."""
+def test_boss_special_effects_list_exists():
+    """Boss exposes a _special_effects list for shockwaves / melee AoEs."""
     from boss import Boss
     b = Boss(0, 0, "mini_boss_2")
-    assert hasattr(b, "_box_blocked")
-    assert hasattr(b, "_dash_step_with_collision")
-    assert hasattr(b, "_unstick_from_wall")
+    assert hasattr(b, "_special_effects")
+    assert isinstance(b._special_effects, list)
 
 
-def test_boss_box_blocked_returns_false_with_no_tilemap():
-    """When tilemap is None, _box_blocked should return False (free space)."""
+def test_boss_starts_not_using_special():
+    """A freshly spawned boss is not in the middle of a special attack."""
     from boss import Boss
-    b = Boss(0, 0, "mini_boss_2")
-    assert b._box_blocked(0, 0, None) is False
+    b = Boss(0, 0, "final_boss")
+    assert b._using_special is False
+    assert b._pending_special is None

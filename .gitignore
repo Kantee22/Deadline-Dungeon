@@ -1,4 +1,4 @@
-# -- Python --
+# -- Python cache files --
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,10 +6,25 @@ __pycache__/
 .Python
 
 # -- Virtual environments --
+.venv/
 venv/
 env/
 ENV/
-.venv/
+
+# -- Environment variables --
+.env
+.env.*
+
+# -- IDE / Editor settings --
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# -- Logs and temporary files --
+*.log
+*.tmp
 
 # -- Distribution / packaging --
 build/
@@ -17,21 +32,17 @@ dist/
 *.egg-info/
 *.egg
 
-# -- IDE / editors --
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
 # -- OS --
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# -- Project runtime data --
+# -- Project runtime data (not needed in repo) --
 stats_data/
-*.log
 
 # -- Snapshot exports from visualize.py --
 dashboard_snapshot*.png
+
+# -- Local-only backup folders --
+backup_pre_glyph/
+backup_pre_polish/

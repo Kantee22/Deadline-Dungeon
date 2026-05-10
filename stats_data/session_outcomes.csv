@@ -117,3 +117,7 @@ session_id,player_name,timestamp,won,final_level,time_survived,player_class,boss
 1778228372,dsa,1778228448.05,False,3,81.86,Soldier,none,False
 1778230248,dsa,1778230341.16,False,6,93.23,Soldier,none,False
 1778231348,dsa,1778231431.86,False,2,193.9,Soldier,none,False
+1778411179,sddd,1778411402.8,False,11,193.88,Soldier,none,False
+1778411779,fdf,1778412177.66,True,30,345.85,Knight,Elite Orc,False
+1778412484,sdad,1778412809.95,True,30,332.27,Wizard,Elite Orc,False
+1778413441,adas,1778413755.94,True,30,321.46,Wizard,Berserker Grom,False

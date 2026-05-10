@@ -1,6 +1,6 @@
 # Deadline Dungeon
 
-[![Tests](https://github.com/Kantee22/Deadlinedungeon/actions/workflows/test.yml/badge.svg)](https://github.com/Kantee22/Deadlinedungeon/actions/workflows/test.yml)
+[![Tests](https://github.com/Kantee22/Deadline-Dungeon/actions/workflows/test.yml/badge.svg)](https://github.com/Kantee22/Deadline-Dungeon/actions/workflows/test.yml)
 
 A top-down 2D real-time action RPG built with Python and Pygame. Race against a 10-minute timer to reach Level 30 and defeat the Final Boss — the Elite Orc.
 
