@@ -2,6 +2,8 @@
 
 [![Tests](https://github.com/Kantee22/Deadline-Dungeon/actions/workflows/test.yml/badge.svg)](https://github.com/Kantee22/Deadline-Dungeon/actions/workflows/test.yml)
 
+📺 **[Watch the demo video on YouTube](https://youtu.be/NhRLgldU7wI)**
+
 A top-down 2D real-time action RPG built with Python and Pygame. Race against a 10-minute timer to reach Level 30 and defeat the Final Boss — the Elite Orc.
 
 **Project for:** Computer Programming II (01219117), Kasetsart University, Department of Computer Engineering  
@@ -175,6 +177,34 @@ The workflow file is at `.github/workflows/test.yml`. After pushing to GitHub,
 the Actions tab will show a green checkmark next to each commit when all tests
 pass.
 
+## Credits & Asset Attribution
+
+This project uses third-party pixel-art asset packs purchased from itch.io.
+All assets are used under the licenses provided by their original creators.
+
+### Dungeon tileset
+
+**Pixel_Poem — Dungeon Tileset II**
+https://pixel-poem.itch.io/dungeon-assetpuck
+
+Used for the procedurally generated dungeon floor and wall tiles
+(`Dungeon_Tileset.png` and the `TileMap` class).
+
+### Character & enemy sprites
+
+**Zerie — Tiny RPG Character Asset Pack v1.03**
+https://zerie.itch.io/tiny-rpg-character-asset-pack
+
+Used for the player classes (Soldier, Knight, Wizard, Archer), regular
+enemies (Slime, Skeleton, Orc), and boss sprites (Greatsword Skeleton,
+Werewolf, Elite Orc), located under the `images/` folder.
+
+All other code, design, gameplay logic, and visual effects (Sloth Glyphs,
+candles, screen shake, vignettes, floor decorations, UI/HUD) are original
+work by the project author.
+
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details. The MIT license applies
+to the source code only; the third-party asset packs listed above remain
+under their original licenses from their respective creators.
