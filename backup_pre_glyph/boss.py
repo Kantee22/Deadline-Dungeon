@@ -320,14 +320,13 @@ class Boss(Enemy):
             })
 
         elif kind == "charge_dash":
-            # Damage at where boss stopped (bigger radius so the lunge-bite
-            # combo reads as a real area-of-effect and is easier to dodge).
+            # Damage at where boss stopped (bigger radius so lunge bite feels wider)
             self._special_effects.append({
                 "type": "boss_melee",
                 "x": self.x, "y": self.y,
-                "radius": 175,
+                "radius": 140,
                 "damage": pending["damage"],
-                "timer": 0.4, "life": 0.4,
+                "timer": 0.3, "life": 0.3,
                 "hit": False,
                 "color": (200, 50, 50),
             })
@@ -356,68 +355,6 @@ class Boss(Enemy):
                 "impact_delay": 0.0,
                 "inner_ring": True,
             })
-
-    # ───── Movement collision helpers (used by dash / jump_slam) ─────
-    def _box_blocked(self, cx, cy, tilemap):
-        """Return True if the boss's bounding box at (cx, cy) overlaps any
-        wall tile. Checks all 4 corners + center, not just the centerpoint,
-        so the boss's wide body can't slip its center past a wall while the
-        rest of it gets stuck inside."""
-        if tilemap is None:
-            return False
-        # Use a slightly conservative half-size so the boss doesn't graze.
-        half = max(8, int(self.size * 0.45))
-        pts = (
-            (cx,        cy),
-            (cx - half, cy - half),
-            (cx + half, cy - half),
-            (cx - half, cy + half),
-            (cx + half, cy + half),
-        )
-        for (px, py) in pts:
-            if tilemap.is_wall(px, py):
-                return True
-        return False
-
-    def _dash_step_with_collision(self, step_x, step_y, tilemap):
-        """Try to move (step_x, step_y) using axis-separated, fat collision.
-        Returns (actual_dx, actual_dy)."""
-        if tilemap is None:
-            self.x += step_x
-            self.y += step_y
-            return step_x, step_y
-        moved_x = 0.0
-        moved_y = 0.0
-        # Try both axes together first (handles diagonal dashes cleanly).
-        if not self._box_blocked(self.x + step_x, self.y + step_y, tilemap):
-            self.x += step_x
-            self.y += step_y
-            return step_x, step_y
-        # Otherwise slide along whichever axis is still clear.
-        if step_x and not self._box_blocked(self.x + step_x, self.y, tilemap):
-            self.x += step_x
-            moved_x = step_x
-        if step_y and not self._box_blocked(self.x, self.y + step_y, tilemap):
-            self.y += step_y
-            moved_y = step_y
-        return moved_x, moved_y
-
-    def _unstick_from_wall(self, tilemap):
-        """If the boss ended up overlapping a wall (e.g. spawn next to one,
-        or a dash ended in geometry), nudge it out toward the nearest
-        walkable direction. Tried each frame of update() as a safety net."""
-        if tilemap is None or not self._box_blocked(self.x, self.y, tilemap):
-            return
-        # Try increasing radii until we find a free spot.
-        for radius in (12, 24, 36, 48, 64, 80, 100):
-            for ang_deg in range(0, 360, 30):
-                ang = math.radians(ang_deg)
-                tx = self.x + math.cos(ang) * radius
-                ty = self.y + math.sin(ang) * radius
-                if not self._box_blocked(tx, ty, tilemap):
-                    self.x = tx
-                    self.y = ty
-                    return
 
     def update(self, dt, player_x, player_y, world_w, world_h, tilemap=None):
         """Update boss AI and special attack logic."""
@@ -459,15 +396,19 @@ class Boss(Enemy):
                     move = min(ps["dash_remaining"], dt)
                     step_x = ps["vx"] * ps["dash_speed"] * move
                     step_y = ps["vy"] * ps["dash_speed"] * move
-                    moved_x, moved_y = self._dash_step_with_collision(
-                        step_x, step_y, tilemap)
-                    # If we couldn't move on EITHER axis, the boss has slammed
-                    # into a wall — cancel the rest of the dash so it can't
-                    # accumulate speed against geometry and end up clipped.
-                    if moved_x == 0 and moved_y == 0:
-                        ps["dash_remaining"] = 0
+                    # Axis-separated wall collision for the dash
+                    if tilemap:
+                        if not tilemap.is_wall(self.x + step_x, self.y + step_y):
+                            self.x += step_x
+                            self.y += step_y
+                        elif not tilemap.is_wall(self.x + step_x, self.y):
+                            self.x += step_x
+                        elif not tilemap.is_wall(self.x, self.y + step_y):
+                            self.y += step_y
                     else:
-                        ps["dash_remaining"] -= move
+                        self.x += step_x
+                        self.y += step_y
+                    ps["dash_remaining"] -= move
 
                     # Trail for visual
                     trail = ps.get("trail", [])
@@ -481,14 +422,18 @@ class Boss(Enemy):
                     move = min(ps["jump_remaining"], dt)
                     step_x = ps["vx"] * move
                     step_y = ps["vy"] * move
-                    moved_x, moved_y = self._dash_step_with_collision(
-                        step_x, step_y, tilemap)
-                    if moved_x == 0 and moved_y == 0:
-                        # Landed on a wall — bail out of the jump early so
-                        # the slam fires here instead of clipping further in.
-                        ps["jump_remaining"] = 0
+                    if tilemap:
+                        if not tilemap.is_wall(self.x + step_x, self.y + step_y):
+                            self.x += step_x
+                            self.y += step_y
+                        elif not tilemap.is_wall(self.x + step_x, self.y):
+                            self.x += step_x
+                        elif not tilemap.is_wall(self.x, self.y + step_y):
+                            self.y += step_y
                     else:
-                        ps["jump_remaining"] -= move
+                        self.x += step_x
+                        self.y += step_y
+                    ps["jump_remaining"] -= move
 
                 # Release damage when timer fires
                 ps["release_in"] -= dt
@@ -510,19 +455,11 @@ class Boss(Enemy):
                     self._using_special = False
                     self._pending_special = None
 
-            # Safety net: if a dash/jump or any prior step parked us inside
-            # geometry, nudge us back into walkable space before next frame.
-            self._unstick_from_wall(tilemap)
-
             self._update_special_effects(dt)
             return
 
         # Normal update (inherited from Enemy) - pass tilemap for wall collision
         super().update(dt, player_x, player_y, world_w, world_h, tilemap)
-
-        # Even outside specials, periodically unstick (covers spawn-on-wall
-        # and any edge case where the inherited movement clipped us in).
-        self._unstick_from_wall(tilemap)
 
         if not self.alive or self._is_dying:
             return
@@ -638,6 +575,7 @@ class Boss(Enemy):
             pygame.draw.rect(surface, (40, 0, 0), (bx, by, bar_w, bar_h))
             bar_color = (220, 40, 40) if self.phase < self.max_phases else (255, 100, 30)
             pygame.draw.rect(surface, bar_color, (bx, by, int(bar_w * ratio), bar_h))
+
         # Draw dash trail if boss is currently charging
         if self._using_special and self._pending_special:
             ps = self._pending_special

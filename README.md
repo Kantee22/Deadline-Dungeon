@@ -1,5 +1,7 @@
 # Deadline Dungeon
 
+[![Tests](https://github.com/Kantee22/Deadlinedungeon/actions/workflows/test.yml/badge.svg)](https://github.com/Kantee22/Deadlinedungeon/actions/workflows/test.yml)
+
 A top-down 2D real-time action RPG built with Python and Pygame. Race against a 10-minute timer to reach Level 30 and defeat the Final Boss — the Elite Orc.
 
 **Project for:** Computer Programming II (01219117), Kasetsart University, Department of Computer Engineering  
@@ -142,6 +144,36 @@ Play at least one session first. CSV files are written to `stats_data/` automati
 
 ### `pandas.errors.ParserError`
 If you have CSV files from an older version of the game, some rows may have a different column count. The current `visualize.py` handles this automatically by skipping bad rows. If the issue persists, delete the `stats_data/` folder and play a fresh session.
+
+## Tests & CI
+
+This project ships with a pytest test suite (**84 tests** across 8 modules) and a
+GitHub Actions workflow that runs them on every push and pull request — across
+Python 3.10, 3.11, and 3.12.
+
+```
+tests/
+├── conftest.py                  # headless pygame setup (SDL dummy driver)
+├── test_animation.py             #  4 tests
+├── test_boss.py                  #  9 tests
+├── test_enemy.py                 #  6 tests
+├── test_game_world.py            #  7 tests
+├── test_glyphs.py                # 13 tests
+├── test_player.py                # 16 tests
+├── test_stats_collector.py       # 13 tests
+└── test_tilemap.py               # 16 tests
+```
+
+To run the tests locally:
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
+
+The workflow file is at `.github/workflows/test.yml`. After pushing to GitHub,
+the Actions tab will show a green checkmark next to each commit when all tests
+pass.
 
 ## License
 

@@ -1,8 +1,8 @@
 """tilemap.py - Procedural dungeon map with rooms and corridors."""
 import pygame
 import random
-import os
 import math
+import os
 
 
 class TileMap:
@@ -74,14 +74,10 @@ class TileMap:
         # small per-instance flicker phase so they don't pulse in lockstep.
         self.candles = [
             (wx, wy, random.uniform(0, math.pi * 2),
-                     random.uniform(0.85, 1.15))
+                     random.uniform(0.85, 1.15))   # flicker speed
             for (wx, wy) in self.get_candle_positions(density=0.16)
         ]
         self._decor_time = 0.0
-
-        # Floor scatter: bones, cracks, blood splatters, cobwebs.
-        # Pre-baked into the map surface so they cost nothing per frame.
-        self._paint_floor_decorations()
 
     # -- Tileset loading --
 
@@ -303,78 +299,64 @@ class TileMap:
         return (best_room.centerx * self.DISPLAY_TILE,
                 best_room.centery * self.DISPLAY_TILE)
 
-    def get_glyph_positions(self, count=5, min_separation=320, skip_first_rooms=1):
+    def get_glyph_positions(self, count=5, min_separation=400, skip_first_rooms=1):
         """Return up to `count` floor positions for placing Sloth Glyphs.
-        Glyphs go at the EXACT center of qualifying rooms so the visible
-        circle never clips into the wall. Only rooms big enough to fit the
-        ~120px effect radius on every side are eligible (≥6×6 floor tiles).
-        Skips the first `skip_first_rooms` rooms so the player can't get
-        cursed at spawn."""
+        Skips the first `skip_first_rooms` rooms so the player can't be
+        cursed before they've taken a step. Picks well-spaced points so
+        glyph effects don't overlap into one death zone."""
         chosen = []
-        # Required half-size in tiles. We allow 2 (covers 5×5 rooms which
-        # is the smallest the generator emits). Glyph radius is ~120 px so
-        # the visible halo may graze the wall on tighter rooms — that's
-        # acceptable since most generated rooms are 6–9 tiles wide.
-        min_half_tiles = 2
         candidates = self.rooms[skip_first_rooms:] if len(self.rooms) > skip_first_rooms else self.rooms[:]
-        # Filter rooms that can fit the radius cleanly.
-        candidates = [r for r in candidates
-                      if r.width >= min_half_tiles * 2 + 1
-                      and r.height >= min_half_tiles * 2 + 1]
         random.shuffle(candidates)
         for room in candidates:
             if len(chosen) >= count:
                 break
-            tx = room.centerx
-            ty = room.centery
-            if not (0 <= tx < self.map_w and 0 <= ty < self.map_h):
-                continue
-            if self.grid[ty][tx] != 1:
-                continue
-            # Belt-and-suspenders: verify all tiles in a (2*min_half_tiles+1)
-            # square around the center are floor.
-            ok = True
-            for ddx in range(-min_half_tiles, min_half_tiles + 1):
-                for ddy in range(-min_half_tiles, min_half_tiles + 1):
-                    cx_t = tx + ddx
-                    cy_t = ty + ddy
-                    if not (0 <= cx_t < self.map_w and 0 <= cy_t < self.map_h):
-                        ok = False
-                        break
-                    if self.grid[cy_t][cx_t] != 1:
-                        ok = False
-                        break
-                if not ok:
-                    break
-            if not ok:
-                continue
-            wx = tx * self.DISPLAY_TILE + self.DISPLAY_TILE // 2
-            wy = ty * self.DISPLAY_TILE + self.DISPLAY_TILE // 2
-            if any((wx - cx) ** 2 + (wy - cy) ** 2 < min_separation ** 2
-                   for (cx, cy) in chosen):
-                continue
-            chosen.append((wx, wy))
+            # Place near the room center but with some jitter so it's not
+            # always dead-center. Use tile coords for the offset.
+            for _ in range(8):
+                jx = random.randint(-2, 2)
+                jy = random.randint(-2, 2)
+                tx = room.centerx + jx
+                ty = room.centery + jy
+                if not (0 <= tx < self.map_w and 0 <= ty < self.map_h):
+                    continue
+                if self.grid[ty][tx] != 1:
+                    continue
+                wx = tx * self.DISPLAY_TILE + self.DISPLAY_TILE // 2
+                wy = ty * self.DISPLAY_TILE + self.DISPLAY_TILE // 2
+                # Enforce minimum separation between glyphs.
+                if any((wx - cx) ** 2 + (wy - cy) ** 2 < min_separation ** 2
+                       for (cx, cy) in chosen):
+                    continue
+                chosen.append((wx, wy))
+                break
         return chosen
 
     def get_candle_positions(self, density=0.18):
-        """Return (world_x, world_y) candle decoration spots — anchored
-        to floor tiles directly below a wall (so the candle sits with
-        the wall behind it)."""
+        """Return a list of (world_x, world_y) candle decoration spots.
+        A candle is placed against the bottom of a wall (just above a wall
+        face tile) so it sits on the floor with the wall behind. Density
+        controls roughly what fraction of eligible spots get one."""
         positions = []
         for y in range(self.map_h):
             for x in range(self.map_w):
+                # Floor tile with a wall directly above → candle sits at
+                # the base of that wall, lit pixel-art style.
                 if self.grid[y][x] != 1:
                     continue
                 if y - 1 < 0 or self.grid[y - 1][x] != 0:
                     continue
+                # Skip if there's another wall too close (avoid corners
+                # where the candle would clip into geometry).
                 if x - 1 >= 0 and self.grid[y][x - 1] == 0 and y - 1 >= 0 and self.grid[y - 1][x - 1] == 0:
                     if random.random() < 0.5:
                         continue
+                # Deterministic-ish placement so we don't get a candle on
+                # every wall tile.
                 seed = (x * 41 + y * 71) % 100
                 if seed >= int(density * 100):
                     continue
                 wx = x * self.DISPLAY_TILE + self.DISPLAY_TILE // 2
-                wy = y * self.DISPLAY_TILE + 6
+                wy = y * self.DISPLAY_TILE + 6  # nudged up against wall
                 positions.append((wx, wy))
         return positions
 
@@ -390,159 +372,6 @@ class TileMap:
                     if self.is_walkable(nx, ny):
                         return nx, ny
         return x, y
-
-    # -- Floor decorations (baked into map_surface) --
-
-    def _paint_floor_decorations(self):
-        """Scatter pixel-art bones, cracks, blood splatters, and cobwebs
-        across the dungeon. All cosmetic, baked once into the map surface."""
-        if self.map_surface is None:
-            return
-        rng = random.Random()
-        for room in self.rooms:
-            tiles = []
-            for ty in range(room.top, room.bottom):
-                for tx in range(room.left, room.right):
-                    if 0 <= tx < self.map_w and 0 <= ty < self.map_h \
-                            and self.grid[ty][tx] == 1:
-                        tiles.append((tx, ty))
-            if not tiles:
-                continue
-            area = len(tiles)
-            n_bones    = rng.randint(0, max(1, area // 14))
-            n_cracks   = rng.randint(0, max(1, area // 10))
-            n_splats   = rng.randint(0, max(1, area // 22))
-            n_webs     = rng.randint(0, 2)
-
-            for _ in range(n_bones):
-                tx, ty = rng.choice(tiles)
-                self._paint_bones(tx, ty, rng)
-            for _ in range(n_cracks):
-                tx, ty = rng.choice(tiles)
-                self._paint_crack(tx, ty, rng)
-            for _ in range(n_splats):
-                tx, ty = rng.choice(tiles)
-                self._paint_blood_splat(tx, ty, rng)
-            for _ in range(n_webs):
-                corner_tiles = [
-                    (tx, ty) for (tx, ty) in tiles
-                    if self._is_corner_tile(tx, ty)
-                ]
-                if corner_tiles:
-                    tx, ty = rng.choice(corner_tiles)
-                    self._paint_cobweb(tx, ty, rng)
-
-    def _is_corner_tile(self, tx, ty):
-        wall_count = 0
-        for (dx, dy) in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            nx, ny = tx + dx, ty + dy
-            if not (0 <= nx < self.map_w and 0 <= ny < self.map_h):
-                wall_count += 1
-            elif self.grid[ny][nx] == 0:
-                wall_count += 1
-        return wall_count >= 2
-
-    def _tile_to_world_center(self, tx, ty):
-        return (tx * self.DISPLAY_TILE + self.DISPLAY_TILE // 2,
-                ty * self.DISPLAY_TILE + self.DISPLAY_TILE // 2)
-
-    def _paint_bones(self, tx, ty, rng):
-        cx, cy = self._tile_to_world_center(tx, ty)
-        cx += rng.randint(-12, 12)
-        cy += rng.randint(-10, 10)
-        bone_col      = (220, 215, 195)
-        bone_shadow   = (140, 135, 115)
-        ang = rng.uniform(0, math.pi * 2)
-        length = rng.randint(8, 12)
-        x2 = cx + int(math.cos(ang) * length)
-        y2 = cy + int(math.sin(ang) * length)
-        pygame.draw.line(self.map_surface, bone_shadow,
-                         (cx + 1, cy + 1), (x2 + 1, y2 + 1), 3)
-        pygame.draw.line(self.map_surface, bone_col,
-                         (cx, cy), (x2, y2), 2)
-        pygame.draw.circle(self.map_surface, bone_col, (cx, cy), 2)
-        pygame.draw.circle(self.map_surface, bone_col, (x2, y2), 2)
-        if rng.random() < 0.35:
-            sx = cx + rng.randint(-12, 12)
-            sy = cy + rng.randint(-12, 12)
-            pygame.draw.circle(self.map_surface, bone_shadow, (sx + 1, sy + 1), 4)
-            pygame.draw.circle(self.map_surface, bone_col, (sx, sy), 4)
-            pygame.draw.rect(self.map_surface, (20, 15, 18), (sx - 2, sy - 1, 1, 1))
-            pygame.draw.rect(self.map_surface, (20, 15, 18), (sx + 1, sy - 1, 1, 1))
-            pygame.draw.line(self.map_surface, bone_shadow,
-                             (sx - 2, sy + 2), (sx + 2, sy + 2))
-
-    def _paint_crack(self, tx, ty, rng):
-        cx, cy = self._tile_to_world_center(tx, ty)
-        cx += rng.randint(-16, 16)
-        cy += rng.randint(-14, 14)
-        crack_col = (28, 18, 25)
-        x, y = cx, cy
-        ang = rng.uniform(0, math.pi * 2)
-        n_seg = rng.randint(3, 6)
-        for _ in range(n_seg):
-            seg_len = rng.randint(4, 8)
-            ang += rng.uniform(-0.7, 0.7)
-            nx = x + int(math.cos(ang) * seg_len)
-            ny = y + int(math.sin(ang) * seg_len)
-            pygame.draw.line(self.map_surface, crack_col, (x, y), (nx, ny), 1)
-            x, y = nx, ny
-
-    def _paint_blood_splat(self, tx, ty, rng):
-        cx, cy = self._tile_to_world_center(tx, ty)
-        cx += rng.randint(-12, 12)
-        cy += rng.randint(-10, 10)
-        blood_main = (90, 18, 22)
-        blood_dark = (50, 8, 12)
-        pygame.draw.circle(self.map_surface, blood_dark, (cx + 1, cy + 1), 4)
-        pygame.draw.circle(self.map_surface, blood_main, (cx, cy), 3)
-        for _ in range(rng.randint(2, 4)):
-            dx = rng.randint(-9, 9)
-            dy = rng.randint(-7, 7)
-            r = rng.choice([1, 1, 2])
-            pygame.draw.circle(self.map_surface, blood_main, (cx + dx, cy + dy), r)
-
-    def _paint_cobweb(self, tx, ty, rng):
-        candidates = []
-        for (dx, dy, name) in (
-            (-1, -1, "tl"), ( 1, -1, "tr"),
-            (-1,  1, "bl"), ( 1,  1, "br"),
-        ):
-            wx = tx + dx
-            wy_v = ty + dy
-            wall_h = not (0 <= wx < self.map_w and 0 <= ty < self.map_h
-                          and self.grid[ty][wx] == 1)
-            wall_v = not (0 <= tx < self.map_w and 0 <= wy_v < self.map_h
-                          and self.grid[wy_v][tx] == 1)
-            if wall_h and wall_v:
-                candidates.append((dx, dy, name))
-        if not candidates:
-            return
-        dx, dy, _ = rng.choice(candidates)
-        ts = self.DISPLAY_TILE
-        anchor_x = tx * ts + (0 if dx < 0 else ts)
-        anchor_y = ty * ts + (0 if dy < 0 else ts)
-        web_col = (180, 175, 165)
-        web_shadow = (90, 88, 85)
-        span = 14
-        end1_x = anchor_x + (-span if dx < 0 else span)
-        end1_y = anchor_y
-        end2_x = anchor_x
-        end2_y = anchor_y + (-span if dy < 0 else span)
-        pygame.draw.line(self.map_surface, web_shadow, (anchor_x, anchor_y), (end1_x, end1_y))
-        pygame.draw.line(self.map_surface, web_shadow, (anchor_x, anchor_y), (end2_x, end2_y))
-        mid_x = (end1_x + end2_x) // 2
-        mid_y = (end1_y + end2_y) // 2
-        pygame.draw.line(self.map_surface, web_shadow, (anchor_x, anchor_y), (mid_x, mid_y))
-        for r_frac in (0.4, 0.75):
-            ax = anchor_x + int((end1_x - anchor_x) * r_frac)
-            ay = anchor_y + int((end1_y - anchor_y) * r_frac)
-            bx = anchor_x + int((mid_x - anchor_x) * r_frac)
-            by = anchor_y + int((mid_y - anchor_y) * r_frac)
-            cx2 = anchor_x + int((end2_x - anchor_x) * r_frac)
-            cy2 = anchor_y + int((end2_y - anchor_y) * r_frac)
-            pygame.draw.line(self.map_surface, web_col, (ax, ay), (bx, by))
-            pygame.draw.line(self.map_surface, web_col, (bx, by), (cx2, cy2))
 
     # -- Draw --
 
@@ -562,113 +391,59 @@ class TileMap:
         dest_y = clipped.y - int(camera_y)
         surface.blit(self.map_surface, (dest_x, dest_y), clipped)
 
+        # Candles drawn directly on top of the floor so they flicker live
+        # without re-baking the whole map surface every frame.
         self._draw_candles(surface, camera_x, camera_y, screen_w, screen_h)
 
     def _draw_candles(self, surface, camera_x, camera_y, screen_w, screen_h):
-        """Pixel-art gothic candle: small wax body, melted top, animated
-        teardrop flame, restrained warm glow that doesn't dominate the room."""
+        """Draw small gothic candles along eligible wall tiles."""
         if not self.candles:
             return
         cam_x_int = int(camera_x)
         cam_y_int = int(camera_y)
-
+        # Cull margin — candles + their glow stay within ±48px of viewport.
         for (wx, wy, phase, speed) in self.candles:
             sx = wx - cam_x_int
             sy = wy - cam_y_int
             if sx < -32 or sx > screen_w + 32:
                 continue
-            if sy < -50 or sy > screen_h + 32:
+            if sy < -48 or sy > screen_h + 48:
                 continue
 
-            # Layered flicker for "alive" flame (kept subtle).
+            # Flicker: combine slow sin + fast jitter to feel like flame.
             t = self._decor_time * speed
-            flicker = 0.92 + 0.06 * math.sin(t * 5.0 + phase) \
-                           + 0.04 * math.sin(t * 13.0 + phase * 1.7)
-            flicker = max(0.85, min(1.10, flicker))
+            flicker = 0.7 + 0.18 * math.sin(t * 6.0 + phase) \
+                          + 0.12 * math.sin(t * 17.0 + phase * 2.3)
+            flicker = max(0.55, min(1.15, flicker))
 
-            # ── Geometry: smaller pillar (5x12) so the glow doesn't engulf it ──
-            base_y    = sy + 6
-            cand_w    = 5
-            cand_h    = 12
-            cand_x    = sx - cand_w // 2
-            cand_top  = base_y - cand_h
-            wick_y    = cand_top - 1
+            # 1) Candle stub — pale wax body, 4px wide, 9px tall.
+            wax_top = sy - 4
+            wax_col = (220, 210, 188)
+            pygame.draw.rect(surface, wax_col, (sx - 2, wax_top, 4, 9))
+            # Wax shadow line for shape.
+            pygame.draw.line(surface, (140, 130, 110),
+                             (sx - 2, wax_top + 8), (sx + 1, wax_top + 8))
 
-            # ── 1. Soft warm glow — much smaller and less saturated ──
-            glow_r = int(18 * flicker)
-            glow = pygame.Surface((glow_r * 2 + 4, glow_r * 2 + 4),
-                                  pygame.SRCALPHA)
-            for i in range(6, 0, -1):
-                rr = int(glow_r * (i / 6.0))
-                a = int(18 * (i / 6.0) * flicker)
-                pygame.draw.circle(glow, (255, 175, 85, a),
-                                   (glow_r + 2, glow_r + 2), rr)
-            surface.blit(glow,
-                         (sx - glow_r - 2, wick_y - 4 - glow_r - 2),
+            # 2) Wick.
+            pygame.draw.line(surface, (40, 30, 25),
+                             (sx, wax_top - 1), (sx, wax_top - 3))
+
+            # 3) Outer glow halo (additive).
+            halo_r = int(14 * flicker)
+            halo = pygame.Surface((halo_r * 2, halo_r * 2), pygame.SRCALPHA)
+            for i in range(4, 0, -1):
+                a = int(40 * (i / 4) * flicker)
+                pygame.draw.circle(halo, (255, 170, 70, a),
+                                   (halo_r, halo_r),
+                                   int(halo_r * (i / 4)))
+            surface.blit(halo, (sx - halo_r, wax_top - 6 - halo_r),
                          special_flags=pygame.BLEND_RGBA_ADD)
 
-            # ── 2. Wax pool / drip puddle (tiny) ──
-            pool_dark = (110, 95, 75)
-            pool_main = (200, 185, 155)
-            pool_lite = (235, 225, 200)
-            pygame.draw.ellipse(surface, pool_dark,
-                                (cand_x - 2, base_y - 1, cand_w + 4, 4))
-            pygame.draw.ellipse(surface, pool_main,
-                                (cand_x - 1, base_y - 1, cand_w + 2, 3))
-            pygame.draw.ellipse(surface, pool_lite,
-                                (cand_x, base_y - 1, cand_w, 2))
-
-            # ── 3. Candle body — slim pillar with shading ──
-            wax_main   = (230, 218, 192)
-            wax_shadow = (165, 150, 122)
-            wax_light  = (252, 248, 225)
-
-            # Main shaft
-            pygame.draw.rect(surface, wax_main,
-                             (cand_x, cand_top, cand_w, cand_h))
-            # Right edge shadow (1px)
-            pygame.draw.rect(surface, wax_shadow,
-                             (cand_x + cand_w - 1, cand_top + 1,
-                              1, cand_h - 1))
-            # Left edge highlight (1px)
-            pygame.draw.rect(surface, wax_light,
-                             (cand_x, cand_top + 1, 1, cand_h - 2))
-
-            # ── 4. Melted dip on top ──
-            pygame.draw.line(surface, pool_dark,
-                             (cand_x + 1, cand_top),
-                             (cand_x + cand_w - 2, cand_top))
-            pygame.draw.rect(surface, (60, 45, 35),
-                             (sx, cand_top, 1, 1))
-
-            # ── 5. Wax drip (single, deterministic) ──
-            drip_rng = int(phase * 1000) & 0xFF
-            if drip_rng & 0b001:
-                pygame.draw.line(surface, wax_main,
-                                 (cand_x, cand_top + 3),
-                                 (cand_x, cand_top + 7))
-            if drip_rng & 0b010:
-                pygame.draw.line(surface, wax_main,
-                                 (cand_x + cand_w - 1, cand_top + 4),
-                                 (cand_x + cand_w - 1, cand_top + 8))
-
-            # ── 6. Wick — small dark stub ──
-            pygame.draw.line(surface, (40, 30, 25),
-                             (sx, cand_top - 1), (sx, wick_y - 1), 1)
-
-            # ── 7. Flame — small clean teardrop ──
-            sway = int(math.sin(t * 4.0 + phase) * 0.6)
-            fx = sx + sway
-            flame_h = max(5, int(7 * flicker))
-            flame_w = 3
-            flame_top_y = wick_y - flame_h
-            flame_rect = pygame.Rect(fx - flame_w // 2, flame_top_y,
-                                     flame_w, flame_h)
-            # Outer (orange)
-            pygame.draw.ellipse(surface, (255, 110, 35), flame_rect)
-            # Inner (yellow), 1px wide
-            inner_rect = pygame.Rect(fx, flame_top_y + 1, 1, flame_h - 3)
-            pygame.draw.rect(surface, (255, 210, 110), inner_rect)
-            # White-hot core
-            core_y = flame_top_y + max(2, flame_h // 3)
-            pygame.draw.rect(surface, (255, 250, 220), (fx, core_y, 1, 1))
+            # 4) Flame body — small teardrop shape (yellow inside, orange out).
+            fy = wax_top - 5
+            outer_r = max(2, int(3 * flicker))
+            inner_r = max(1, outer_r - 1)
+            pygame.draw.circle(surface, (255, 130, 40),
+                               (sx, fy), outer_r)
+            pygame.draw.circle(surface, (255, 230, 140),
+                               (sx, fy - 1), inner_r)

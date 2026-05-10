@@ -69,10 +69,6 @@ class Game:
         self._shake_offset_y = 0.0
         self._last_player_hp = self.player.hp
 
-        # Sloth Glyph: drain HP carries fractionally so 1.5 HP/sec lands
-        # cleanly even at 60 FPS where each frame's drain is ~0.025 HP.
-        self._glyph_drain_accumulator = 0.0
-
     def run(self):
         running = True
         while running:
@@ -412,40 +408,8 @@ class Game:
         # Update player
         self.player.update(dt, self.world.tilemap)
 
-        # Sloth Glyphs — being inside a circle for 1.2 sec wakes it (any
-        # movement counts; only exiting the radius resets). Drain
-        # accumulates fractionally so 1.5 HP/s lands cleanly at 60 FPS.
-        # Note: time_mult is applied ONLY to the dungeon timer (deadline
-        # countdown) — enemies, spawning, AI, animations all keep their
-        # normal pace. Only the deadline races faster while you're cursed.
-        time_mult = self.world.update_glyphs(
-            dt, self.player.x, self.player.y)
-        drain = self.world.total_glyph_drain(dt)
-        if drain > 0:
-            self._glyph_drain_accumulator += drain
-            if self._glyph_drain_accumulator >= 1.0:
-                damage_to_apply = int(self._glyph_drain_accumulator)
-                self._glyph_drain_accumulator -= damage_to_apply
-                # Bypass invincibility for the curse — it's environmental,
-                # not a hit. Apply directly so iframes don't shield idling.
-                prev_inv = self.player.invincible_timer
-                self.player.invincible_timer = 0
-                self.player.take_damage(damage_to_apply)
-                self.player.invincible_timer = max(prev_inv, self.player.invincible_timer)
-
-        # Update world with NORMAL dt — enemies / spawning / AI all run
-        # at their usual speed. Only the deadline timer accelerates below.
+        # Update world
         events = self.world.update(dt, self.player)
-
-        # Inject extra deadline pressure: when cursed, the world timer
-        # gets bonus seconds added on top of its normal tick. So the
-        # deadline counts down faster but nothing else changes pace.
-        if time_mult > 1.0:
-            self.world.timer += dt * (time_mult - 1.0)
-
-        # Tick map decorations (candle flicker) using REAL dt so candles
-        # still flicker normally even when the curse is active.
-        self.world.tilemap.update_decor(dt)
 
         # Find the last defeated boss name from this tick's events (if any)
         # so the victory log records which variant the player actually beat.
@@ -647,57 +611,6 @@ class Game:
             self.level_up_flash = 1.0
             self.world.level_up_timer = 1.0
 
-    # Cached ambient vignette surface — built once, reused every frame.
-    _ambient_vignette_cache = None
-
-    def _draw_ambient_vignette(self):
-        """Soft permanent vignette around the screen edges.
-        Cached so we only build the gradient surface once."""
-        if Game._ambient_vignette_cache is None:
-            w, h = SCREEN_W, SCREEN_H
-            v = pygame.Surface((w, h), pygame.SRCALPHA)
-            # Gradient: stronger at the corners, almost nothing in the
-            # center. Built as 14 nested rectangles with slowly increasing
-            # alpha for a smooth-feeling falloff.
-            for i in range(14):
-                inset = i * 14
-                if inset >= min(w, h) // 2:
-                    break
-                alpha = max(0, 90 - i * 7)
-                pygame.draw.rect(v, (0, 0, 0, alpha),
-                                 (inset, inset, w - inset * 2, h - inset * 2),
-                                 14)
-            Game._ambient_vignette_cache = v
-        self.screen.blit(Game._ambient_vignette_cache, (0, 0))
-
-    def _draw_curse_vignette(self):
-        """Crimson vignette + warning text while a glyph is actively
-        siphoning the player. Uses primitives only — no extra art."""
-        w, h = SCREEN_W, SCREEN_H
-        strength = 0.0
-        for g in self.world.glyphs:
-            if g.is_active and g.awake_phase > strength:
-                strength = g.awake_phase
-        if strength <= 0:
-            return
-        vignette = pygame.Surface((w, h), pygame.SRCALPHA)
-        max_alpha = int(120 * strength)
-        for i in range(8):
-            inset = i * 18
-            a = max(0, max_alpha - i * 18)
-            pygame.draw.rect(vignette, (60, 0, 10, a),
-                             (inset, inset, w - inset * 2, h - inset * 2),
-                             18)
-        self.screen.blit(vignette, (0, 0))
-        if strength > 0.5:
-            warn_font = pygame.font.SysFont("serif", 22, bold=True, italic=True)
-            text = warn_font.render("✠ Cursed by Sloth ✠", True,
-                                    (220, 120, 120))
-            text.set_alpha(int(220 * strength))
-            # Sit below the centered timer (~y 30) so the two don't overlap.
-            tr = text.get_rect(center=(w // 2, 70))
-            self.screen.blit(text, tr)
-
     def _draw(self):
         self.screen.fill((10, 8, 12))
 
@@ -718,17 +631,6 @@ class Game:
 
         # Player
         self.player.draw(self.screen, cx, cy)
-
-        # Ambient vignette: a permanent soft dark falloff around the
-        # screen edges so the dungeon feels lit by a small light source
-        # near the player. Subtle enough not to read as a "filter".
-        self._draw_ambient_vignette()
-
-        # Cursed-glyph vignette: red ink darkens the edges while a glyph
-        # is actively siphoning the player. Drawn over the world but
-        # under the HUD so numbers stay readable.
-        if self.world.any_glyph_active():
-            self._draw_curse_vignette()
 
         # HUD
         self.ui.draw_hud(self.screen, self.player,

@@ -7,7 +7,6 @@ import math
 import random
 from enemy import Enemy
 from boss import Boss
-from glyphs import spawn_glyphs
 
 
 class GameWorld:
@@ -33,10 +32,6 @@ class GameWorld:
         self.timer = 0.0
         self.enemies = []
         self.bosses = []
-
-        # Cursed sloth glyphs scattered around the map. They wake up when the
-        # player idles inside their radius and drain HP / accelerate time.
-        self.glyphs = spawn_glyphs(self.tilemap, count=5)
 
         self.spawn_timer = 0.0
         self.spawn_interval = 2.5
@@ -224,35 +219,9 @@ class GameWorld:
 
         return events
 
-    def update_glyphs(self, dt, player_x, player_y):
-        """Tick every glyph so its awake/dormant state reacts to the player.
-        Returns the strongest time multiplier currently active across all
-        glyphs (1.0 if none are awake), so the caller can stretch dt for
-        the dungeon timer accordingly. The new mechanic only cares about
-        whether the player is *inside* a glyph radius — moving inside still
-        counts; only walking out resets the wake timer."""
-        max_mult = 1.0
-        for glyph in self.glyphs:
-            glyph.update(dt, player_x, player_y)
-            mult = glyph.time_multiplier()
-            if mult > max_mult:
-                max_mult = mult
-        return max_mult
-
-    def total_glyph_drain(self, dt):
-        """Sum HP drained by all currently active glyphs this frame."""
-        return sum(g.hp_drain(dt) for g in self.glyphs)
-
-    def any_glyph_active(self):
-        return any(g.is_active for g in self.glyphs)
-
     def draw_ground(self, surface, camera_x, camera_y, screen_w, screen_h):
         """Draw the floor/wall tiles (underneath entities)."""
         self.tilemap.draw(surface, camera_x, camera_y, screen_w, screen_h)
-        # Glyphs are part of the floor layer — drawn AFTER the tilemap but
-        # BEFORE entities so monsters and the player walk over the sigils.
-        for glyph in self.glyphs:
-            glyph.draw(surface, camera_x, camera_y)
 
     def draw_entities(self, surface, camera_x, camera_y):
         for enemy in self.enemies:

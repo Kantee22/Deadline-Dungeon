@@ -224,16 +224,14 @@ class GameWorld:
 
         return events
 
-    def update_glyphs(self, dt, player_x, player_y):
+    def update_glyphs(self, dt, player_x, player_y, player_idle_time):
         """Tick every glyph so its awake/dormant state reacts to the player.
         Returns the strongest time multiplier currently active across all
         glyphs (1.0 if none are awake), so the caller can stretch dt for
-        the dungeon timer accordingly. The new mechanic only cares about
-        whether the player is *inside* a glyph radius — moving inside still
-        counts; only walking out resets the wake timer."""
+        the dungeon timer accordingly."""
         max_mult = 1.0
         for glyph in self.glyphs:
-            glyph.update(dt, player_x, player_y)
+            glyph.update(dt, player_x, player_y, player_idle_time)
             mult = glyph.time_multiplier()
             if mult > max_mult:
                 max_mult = mult
