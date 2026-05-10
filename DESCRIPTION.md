@@ -350,4 +350,3 @@ Every row includes `session_id`, `player_name`, and `timestamp` so data can be j
 - **84-test pytest suite** covering tilemap, glyphs, player, enemy, boss, stats collector, animation, and game world (`tests/`)
 - **GitHub Actions CI** runs the full test suite on every push and pull request, across Python 3.10 / 3.11 / 3.12 (`.github/workflows/test.yml`)
 - **CI badge** in README shows the current test status at a glance
-                                                                                                                                             
